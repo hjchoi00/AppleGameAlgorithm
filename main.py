@@ -1,5 +1,5 @@
 """
-main6.py - 다양한 전략을 비교할 수 있는 사과게임 솔버
+main.py - 다양한 전략을 비교할 수 있는 사과게임 솔버
 
 전략 목록:
 1. Center-Out: 중앙에서 가까운 것부터 제거
@@ -8,6 +8,7 @@ main6.py - 다양한 전략을 비교할 수 있는 사과게임 솔버
 4. Depth-1 Lookahead: 1수 앞 예측 (다음 기회 최대화)
 5. Depth-2 Lookahead: 2수 앞 예측
 6. Full Rollout: 끝까지 시뮬레이션 (닥터 스트레인지)
+7. My Depth-2: 사용자 정의 Depth-2 전략
 """
 
 import numpy as np
@@ -435,6 +436,109 @@ def solve_full_rollout(matrix, top_k=30, verbose=True):
     return board, total_score, moves
 
 # =========================================================
+# 전략 7: My Depth-2 (순수 Unlock 최대화)
+# =========================================================
+
+@njit
+def get_best_move_pure_depth2(board):
+    """
+    [Pure Depth-2 Logic]
+    현재(A) -> 미래(B) -> 그 다음(C)까지 시뮬레이션.
+    1순위: 2수 뒤에 남는 후보 개수(C)가 가장 많은 것
+    2순위: 동점일 경우 사과 개수(cells)가 적은 것 (2개짜리 선호)
+    3순위: 면적(area)이 작은 것
+    """
+    cands_a = find_candidates_fast(board)
+    
+    # 후보가 없으면 종료 신호 (-1) 반환
+    if not cands_a:
+        return -1, -1, -1, -1, -1, -1
+
+    best_idx = -1
+    global_max_options = -1
+    
+    # 동점 처리 기준값
+    min_cells = 999
+    min_area = 999999
+
+    # === Loop A ===
+    for i in range(len(cands_a)):
+        r1, c1, r2, c2, cells_a, area_a = cands_a[i]
+
+        # 1. A 실행 시뮬레이션
+        sim1 = board.copy()
+        apply_move_fast(sim1, r1, c1, r2, c2)
+
+        # 2. B 후보 탐색
+        cands_b = find_candidates_fast(sim1)
+        
+        # A를 뒀을 때 도달 가능한 '최고의 미래' 찾기
+        path_max_options = 0
+        
+        if len(cands_b) > 0:
+            for j in range(len(cands_b)):
+                rb1, cb1, rb2, cb2, _, _ = cands_b[j]
+                
+                # B 실행 시뮬레이션
+                sim2 = sim1.copy()
+                apply_move_fast(sim2, rb1, cb1, rb2, cb2)
+                
+                # 3. C 후보 개수 카운트 (Unlock Potential)
+                cands_c = find_candidates_fast(sim2)
+                options = len(cands_c)
+                
+                if options > path_max_options:
+                    path_max_options = options
+        
+        # === 비교 및 갱신 ===
+        # 1순위: 미래의 기회가 더 많은가?
+        if path_max_options > global_max_options:
+            global_max_options = path_max_options
+            best_idx = i
+            min_cells = cells_a
+            min_area = area_a
+            
+        # 2순위: 미래 기회가 같다면? (가성비 체크)
+        elif path_max_options == global_max_options:
+            # 사과 개수가 적은 것 우선 (2개짜리)
+            if cells_a < min_cells:
+                best_idx = i
+                min_cells = cells_a
+                min_area = area_a
+            # 사과 개수도 같다면 면적 작은 것
+            elif cells_a == min_cells:
+                if area_a < min_area:
+                    best_idx = i
+                    min_area = area_a
+
+    return cands_a[best_idx]
+
+def solve_my_depth2(matrix, verbose=True):
+    """
+    사용자 정의 Depth-2 전략 실행 함수
+    """
+    board = matrix.copy()
+    total_score = 0
+    moves = []
+
+    while True:
+        # Numba 최적화 함수 호출
+        r1, c1, r2, c2, cells, area = get_best_move_pure_depth2(board)
+        
+        # 종료 신호 체크
+        if r1 == -1:
+            break
+            
+        apply_move_fast(board, r1, c1, r2, c2)
+        total_score += cells
+        moves.append((r1, c1, r2, c2, cells))
+
+    if verbose:
+        print(f"[My Depth-2] 총점: {total_score}, 횟수: {len(moves)}")
+
+    return board, total_score, moves
+
+# =========================================================
 # 모든 전략 비교
 # =========================================================
 
@@ -451,6 +555,7 @@ def compare_all_strategies(matrix):
         ("Depth-1 Lookahead", solve_depth1_lookahead),
         ("Depth-2 Lookahead", solve_depth2_lookahead),
         ("Full-Rollout", solve_full_rollout),
+        ("My Depth-2", solve_my_depth2),
     ]
     
     results = []
