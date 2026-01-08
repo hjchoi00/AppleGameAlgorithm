@@ -491,19 +491,34 @@ def compare_all_strategies(matrix):
 # =========================================================
 
 if __name__ == "__main__":
-    mat = read_matrix("board_img/image1_matrix.txt")
+    import sys
+    import os
+    
+    if len(sys.argv) < 2:
+        print("사용법: python main.py <보드파일명>")
+        print("예시: python main.py board1")
+        sys.exit(1)
+    
+    board_name = sys.argv[1]
+    
+    # .txt 확장자가 없으면 추가
+    if not board_name.endswith(".txt"):
+        board_name += ".txt"
+    
+    # board_mat/ 경로가 없으면 추가
+    if not os.path.dirname(board_name):
+        board_path = os.path.join("board_mat", board_name)
+    else:
+        board_path = board_name
+    
+    if not os.path.exists(board_path):
+        print(f"오류: 파일을 찾을 수 없습니다: {board_path}")
+        sys.exit(1)
+    
+    mat = read_matrix(board_path)
+    print(f"보드 파일: {board_path}")
     print(f"보드 크기: {mat.shape}")
     print(f"보드:\n{mat}\n")
     
     # 모든 전략 비교
     compare_all_strategies(mat)
-    
-    # # 개별 전략 실행 예시
-    # print("\n" + "=" * 60)
-    # print("▶ Full-Rollout 전략 상세 실행")
-    # print("=" * 60)
-    # final_board, score, moves = solve_full_rollout(mat, top_k=50, verbose=True)
-    # print(f"\n최종 보드:\n{final_board}")
-    # print(f"\n이동 기록:")
-    # for i, (r1, c1, r2, c2, cells) in enumerate(moves, 1):
-    #     print(f"  {i:3d}. ({r1},{c1})~({r2},{c2}) → {cells}개 제거")
