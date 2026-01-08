@@ -15,10 +15,18 @@ class AppleGameOCR:
         self.reader = easyocr.Reader(['en'], gpu=True)
         
     def load_image(self, image_path):
-        """이미지 로드"""
-        self.image = cv2.imread(image_path)
-        self.original = self.image.copy()
-        return self.image is not None
+        """이미지 로드 (한글 경로 지원)"""
+        # 한글 경로 지원을 위해 numpy.fromfile + cv2.imdecode 사용
+        try:
+            img_array = np.fromfile(image_path, dtype=np.uint8)
+            self.image = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+            if self.image is not None:
+                self.original = self.image.copy()
+                return True
+            return False
+        except Exception as e:
+            print(f"이미지 로드 오류: {e}")
+            return False
     
     def detect_apples(self):
         """빨간 사과 영역 감지"""
@@ -236,25 +244,37 @@ class AppleGameOCR:
 
 
 def main():
+    import re
+    from pathlib import Path
+    
+    # 현재 스크립트 폴더 기준 경로 설정
+    script_dir = Path(__file__).parent
+    board_img_dir = script_dir / "board_img"
+    board_mat_dir = script_dir / "board_mat"
+    
+    # board_mat 폴더가 없으면 생성
+    board_mat_dir.mkdir(exist_ok=True)
+    
     # 명령줄 인자 처리
     if len(sys.argv) < 2:
-        print("사용법: python apple_ocr.py <이미지파일명>")
-        print("예시: python apple_ocr.py image.png")
-        print("\nboard_img 폴더에 있는 이미지 파일명을 입력하세요.")
+        print("=" * 50)
+        print("🍎 OCR 기반 사과 게임 숫자 추출기")
+        print("=" * 50)
+        print("\n사용법: python apple_ocr.py <이미지파일명>")
+        print("예시: python apple_ocr.py image1.png")
+        print("      → board_img/image1.png 에서 읽어서")
+        print("      → board_mat/board1.txt 로 저장")
         sys.exit(1)
     
     # 이미지 파일명
     image_name = sys.argv[1]
-    
-    # board_img 폴더 경로
-    board_img_dir = "board_img"
-    image_path = os.path.join(board_img_dir, image_name)
+    image_path = board_img_dir / image_name
     
     # 파일 존재 확인
-    if not os.path.exists(image_path):
+    if not image_path.exists():
         print(f"❌ 오류: '{image_path}' 파일을 찾을 수 없습니다.")
         print(f"\nboard_img 폴더 내용:")
-        if os.path.exists(board_img_dir):
+        if board_img_dir.exists():
             files = [f for f in os.listdir(board_img_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
             if files:
                 for f in files:
@@ -272,20 +292,29 @@ def main():
     ocr = AppleGameOCR()
     
     # 이미지를 행렬로 변환
-    matrix = ocr.image_to_matrix(image_path)
+    matrix = ocr.image_to_matrix(str(image_path))
     
     if matrix:
         print("\n" + "=" * 50)
         # 결과 출력
         ocr.print_matrix(matrix)
         
-        # 결과를 파일로 저장
-        output_name = os.path.splitext(image_name)[0] + "_matrix.txt"
-        output_path = os.path.join(board_img_dir, output_name)
-        ocr.save_matrix(matrix, output_path)
+        # 출력 파일명 생성: image1.png -> board1.txt
+        base_name = os.path.splitext(image_name)[0]  # 확장자 제거
+        # 숫자 추출 (예: image1 -> 1, capture123 -> 123)
+        numbers = re.findall(r'\d+', base_name)
+        if numbers:
+            output_name = f"board{numbers[-1]}.txt"  # 마지막 숫자 사용
+        else:
+            output_name = f"board_{base_name}.txt"  # 숫자가 없으면 원본 이름 사용
+        
+        output_path = board_mat_dir / output_name
+        ocr.save_matrix(matrix, str(output_path))
         
         # NumPy 배열로 변환 (추가 처리용)
-        np_matrix = np.array(matrix)
+        # ?를 0으로 변환
+        matrix_clean = [[0 if x == '?' else int(x) for x in row] for row in matrix]
+        np_matrix = np.array(matrix_clean)
         print(f"✅ 행렬 크기: {np_matrix.shape}")
         print(f"✅ 결과 저장: {output_path}")
     else:

@@ -491,7 +491,7 @@ def compare_all_strategies(matrix):
 # =========================================================
 
 if __name__ == "__main__":
-    mat = read_matrix("board_img/image_matrix.txt")
+    mat = read_matrix("board_img/image1_matrix.txt")
     print(f"보드 크기: {mat.shape}")
     print(f"보드:\n{mat}\n")
     
