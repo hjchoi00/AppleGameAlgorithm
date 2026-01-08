@@ -111,7 +111,7 @@ print(f"이동 횟수: {len(moves)}")
 ## 실행 예시
 
 ```bash
-python main.py
+python main.py board1
 ```
 
 출력:
