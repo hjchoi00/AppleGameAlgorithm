@@ -17,6 +17,9 @@ pip install -r requirements.txt
 ```
 ├── main.py          # 전략 알고리즘 구현 및 비교
 ├── apple_ocr.py     # 게임 스크린샷 → 숫자 행렬 변환 (OCR)
+├── apple_yolo.py    # 게임 스크린샷 → 숫자 행렬 변환 (YOLO)
+├── best.pt          # YOLO 학습 모델
+├── grid_config.json # 격자 설정 파일
 ├── board_mat/       # 테스트용 보드 행렬 파일
 └── board_img/       # 게임 스크린샷 이미지
 ```
@@ -48,12 +51,50 @@ compare_all_strategies(mat)
 
 ### 2. 게임 스크린샷에서 자동 변환
 
+#### 방법 A: YOLO 모델 사용 (권장 ⚡)
+
+YOLO 모델을 사용하여 빠르고 정확하게 숫자를 인식합니다.
+
+```bash
+# 설치
+pip install ultralytics opencv-python numpy
+
+# 실행 (board_img/image1.png → board_mat/board1.txt)
+python apple_yolo.py image1.png
+```
+
+```python
+from apple_yolo import AppleGameYOLO
+
+yolo = AppleGameYOLO()
+matrix = yolo.image_to_matrix("board_img/screenshot.png")
+```
+
+> ⚠️ `best.pt`와 `grid_config.json` 파일이 필요합니다.
+
+#### 방법 B: OCR 사용
+
+EasyOCR을 사용하여 숫자를 인식합니다. YOLO보다 느리지만 모델 파일이 필요 없습니다.
+
+```bash
+# 설치
+pip install easyocr opencv-python numpy
+
+# 실행 (board_img/image1.png → board_mat/board1.txt)
+python apple_ocr.py image1.png
+```
+
 ```python
 from apple_ocr import AppleGameOCR
 
 ocr = AppleGameOCR()
-matrix = ocr.image_to_matrix("screenshot.png")
+matrix = ocr.image_to_matrix("board_img/screenshot.png")
 ```
+
+| 방법 | 속도 | 정확도 | 필요 파일 |
+|------|------|--------|-----------|
+| YOLO | ⚡ 빠름 | 높음 | `best.pt`, `grid_config.json` |
+| OCR | 🐢 느림 | 보통 | 없음 |
 
 ### 3. 개별 전략 실행
 
