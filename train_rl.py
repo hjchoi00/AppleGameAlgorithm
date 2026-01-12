@@ -396,9 +396,12 @@ def randomized_search(
     best_params = None
     best_model = None
     
-    # 고정 보드 파일로 평가
-    board_files = [f"board_mat/board{i}.txt" for i in range(1, 9)]
-    board_files = [f for f in board_files if os.path.exists(f)]
+    # 고정 보드 파일로 평가 (board_mat 폴더의 모든 .txt 파일)
+    board_files = sorted([
+        os.path.join("board_mat", f) 
+        for f in os.listdir("board_mat") 
+        if f.endswith(".txt")
+    ])
     
     for trial in range(n_trials):
         print(f"\n{'='*70}")
@@ -578,9 +581,12 @@ if __name__ == "__main__":
         print(f"평균 점수: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
         print(f"최고 점수: {results['max_score']}")
         
-        # 휴리스틱과 비교
-        board_files = [f"board_mat/board{i}.txt" for i in range(1, 9)]
-        board_files = [f for f in board_files if os.path.exists(f)]
+        # 휴리스틱과 비교 (board_mat 폴더의 모든 .txt 파일)
+        board_files = sorted([
+            os.path.join("board_mat", f) 
+            for f in os.listdir("board_mat") 
+            if f.endswith(".txt")
+        ])
         compare_with_heuristics(model, board_files, top_k=top_k_value)
         
     elif args.mode == "eval":
@@ -621,8 +627,11 @@ if __name__ == "__main__":
         else:
             model = PPO.load(model_path)
         
-        board_files = [f"board_mat/board{i}.txt" for i in range(1, 9)]
-        board_files = [f for f in board_files if os.path.exists(f)]
+        board_files = sorted([
+            os.path.join("board_mat", f) 
+            for f in os.listdir("board_mat") 
+            if f.endswith(".txt")
+        ])
         compare_with_heuristics(model, board_files, top_k=top_k_value)
     
     elif args.mode == "search":
