@@ -3,3 +3,6 @@ numpy
 Pillow
 easyocr
 numba
+gymnasium
+stable-baselines3
+torch
