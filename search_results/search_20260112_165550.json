@@ -1,0 +1,523 @@
+{
+  "best_params": {
+    "top_k": 30,
+    "learning_rate": 0.0001,
+    "n_steps": 2048,
+    "batch_size": 128,
+    "n_epochs": 10,
+    "gamma": 0.999,
+    "gae_lambda": 0.99,
+    "n_envs": 2
+  },
+  "best_score": 112.35666666666667,
+  "all_results": [
+    {
+      "trial": 1,
+      "params": {
+        "top_k": 10,
+        "learning_rate": 0.0003,
+        "n_steps": 4096,
+        "batch_size": 32,
+        "n_epochs": 20,
+        "gamma": 0.995,
+        "gae_lambda": 0.97,
+        "n_envs": 2
+      },
+      "fixed_board_mean": 106.25,
+      "fixed_board_scores": [
+        108,
+        119,
+        84,
+        97,
+        122,
+        119,
+        94,
+        107
+      ],
+      "random_board_mean": 104.36666666666666,
+      "combined_score": 105.49666666666667
+    },
+    {
+      "trial": 2,
+      "params": {
+        "top_k": 10,
+        "learning_rate": 0.0005,
+        "n_steps": 4096,
+        "batch_size": 128,
+        "n_epochs": 10,
+        "gamma": 0.995,
+        "gae_lambda": 0.9,
+        "n_envs": 2
+      },
+      "fixed_board_mean": 102.375,
+      "fixed_board_scores": [
+        108,
+        120,
+        90,
+        89,
+        113,
+        108,
+        87,
+        104
+      ],
+      "random_board_mean": 110.26666666666667,
+      "combined_score": 105.53166666666667
+    },
+    {
+      "trial": 3,
+      "params": {
+        "top_k": 50,
+        "learning_rate": 0.0005,
+        "n_steps": 4096,
+        "batch_size": 32,
+        "n_epochs": 10,
+        "gamma": 0.999,
+        "gae_lambda": 0.97,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 105.25,
+      "fixed_board_scores": [
+        102,
+        118,
+        99,
+        105,
+        123,
+        106,
+        89,
+        100
+      ],
+      "random_board_mean": 108.53333333333333,
+      "combined_score": 106.56333333333333
+    },
+    {
+      "trial": 4,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.0001,
+        "n_steps": 1024,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.999,
+        "gae_lambda": 0.97,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 103.0,
+      "fixed_board_scores": [
+        98,
+        106,
+        91,
+        108,
+        116,
+        110,
+        92,
+        103
+      ],
+      "random_board_mean": 104.63333333333334,
+      "combined_score": 103.65333333333334
+    },
+    {
+      "trial": 5,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.0001,
+        "n_steps": 2048,
+        "batch_size": 256,
+        "n_epochs": 20,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 103.25,
+      "fixed_board_scores": [
+        96,
+        115,
+        97,
+        110,
+        114,
+        111,
+        95,
+        88
+      ],
+      "random_board_mean": 107.66666666666667,
+      "combined_score": 105.01666666666667
+    },
+    {
+      "trial": 6,
+      "params": {
+        "top_k": 10,
+        "learning_rate": 0.0001,
+        "n_steps": 1024,
+        "batch_size": 256,
+        "n_epochs": 15,
+        "gamma": 0.999,
+        "gae_lambda": 0.99,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 105.5,
+      "fixed_board_scores": [
+        105,
+        112,
+        91,
+        99,
+        131,
+        113,
+        94,
+        99
+      ],
+      "random_board_mean": 110.26666666666667,
+      "combined_score": 107.40666666666667
+    },
+    {
+      "trial": 7,
+      "params": {
+        "top_k": 30,
+        "learning_rate": 0.0001,
+        "n_steps": 2048,
+        "batch_size": 128,
+        "n_epochs": 10,
+        "gamma": 0.999,
+        "gae_lambda": 0.99,
+        "n_envs": 2
+      },
+      "fixed_board_mean": 110.75,
+      "fixed_board_scores": [
+        111,
+        127,
+        91,
+        104,
+        132,
+        112,
+        98,
+        111
+      ],
+      "random_board_mean": 114.76666666666667,
+      "combined_score": 112.35666666666667
+    },
+    {
+      "trial": 8,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.001,
+        "n_steps": 4096,
+        "batch_size": 32,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 104.5,
+      "fixed_board_scores": [
+        107,
+        110,
+        91,
+        111,
+        111,
+        112,
+        96,
+        98
+      ],
+      "random_board_mean": 111.86666666666666,
+      "combined_score": 107.44666666666666
+    },
+    {
+      "trial": 9,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.0001,
+        "n_steps": 4096,
+        "batch_size": 256,
+        "n_epochs": 20,
+        "gamma": 0.99,
+        "gae_lambda": 0.9,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 101.625,
+      "fixed_board_scores": [
+        107,
+        107,
+        87,
+        111,
+        108,
+        104,
+        95,
+        94
+      ],
+      "random_board_mean": 106.1,
+      "combined_score": 103.41499999999999
+    },
+    {
+      "trial": 10,
+      "params": {
+        "top_k": 10,
+        "learning_rate": 0.0001,
+        "n_steps": 4096,
+        "batch_size": 64,
+        "n_epochs": 20,
+        "gamma": 0.999,
+        "gae_lambda": 0.99,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 107.5,
+      "fixed_board_scores": [
+        102,
+        110,
+        97,
+        118,
+        130,
+        108,
+        98,
+        97
+      ],
+      "random_board_mean": 102.53333333333333,
+      "combined_score": 105.51333333333334
+    },
+    {
+      "trial": 11,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.0003,
+        "n_steps": 1024,
+        "batch_size": 64,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 102.75,
+      "fixed_board_scores": [
+        106,
+        111,
+        86,
+        104,
+        117,
+        112,
+        93,
+        93
+      ],
+      "random_board_mean": 106.0,
+      "combined_score": 104.05000000000001
+    },
+    {
+      "trial": 12,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.0001,
+        "n_steps": 2048,
+        "batch_size": 64,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.97,
+        "n_envs": 4
+      },
+      "error": "board_mat\\board9.txt not found."
+    },
+    {
+      "trial": 13,
+      "params": {
+        "top_k": 20,
+        "learning_rate": 0.001,
+        "n_steps": 2048,
+        "batch_size": 64,
+        "n_epochs": 15,
+        "gamma": 0.999,
+        "gae_lambda": 0.97,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 105.375,
+      "fixed_board_scores": [
+        103,
+        119,
+        101,
+        102,
+        117,
+        107,
+        98,
+        96
+      ],
+      "random_board_mean": 110.6,
+      "combined_score": 107.465
+    },
+    {
+      "trial": 14,
+      "params": {
+        "top_k": 30,
+        "learning_rate": 0.0001,
+        "n_steps": 4096,
+        "batch_size": 32,
+        "n_epochs": 15,
+        "gamma": 0.99,
+        "gae_lambda": 0.9,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 106.75,
+      "fixed_board_scores": [
+        109,
+        123,
+        102,
+        104,
+        117,
+        112,
+        92,
+        95
+      ],
+      "random_board_mean": 106.63333333333334,
+      "combined_score": 106.70333333333333
+    },
+    {
+      "trial": 15,
+      "params": {
+        "top_k": 50,
+        "learning_rate": 0.0001,
+        "n_steps": 1024,
+        "batch_size": 128,
+        "n_epochs": 5,
+        "gamma": 0.999,
+        "gae_lambda": 0.9,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 98.125,
+      "fixed_board_scores": [
+        92,
+        111,
+        83,
+        92,
+        115,
+        103,
+        99,
+        90
+      ],
+      "random_board_mean": 103.23333333333333,
+      "combined_score": 100.16833333333334
+    },
+    {
+      "trial": 16,
+      "params": {
+        "top_k": 50,
+        "learning_rate": 0.001,
+        "n_steps": 4096,
+        "batch_size": 256,
+        "n_epochs": 5,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 105.625,
+      "fixed_board_scores": [
+        108,
+        117,
+        100,
+        101,
+        115,
+        106,
+        98,
+        100
+      ],
+      "random_board_mean": 107.66666666666667,
+      "combined_score": 106.44166666666666
+    },
+    {
+      "trial": 17,
+      "params": {
+        "top_k": 10,
+        "learning_rate": 0.0001,
+        "n_steps": 4096,
+        "batch_size": 32,
+        "n_epochs": 5,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 106.0,
+      "fixed_board_scores": [
+        112,
+        113,
+        95,
+        104,
+        132,
+        95,
+        100,
+        97
+      ],
+      "random_board_mean": 109.06666666666666,
+      "combined_score": 107.22666666666666
+    },
+    {
+      "trial": 18,
+      "params": {
+        "top_k": 50,
+        "learning_rate": 0.0003,
+        "n_steps": 1024,
+        "batch_size": 32,
+        "n_epochs": 20,
+        "gamma": 0.995,
+        "gae_lambda": 0.95,
+        "n_envs": 4
+      },
+      "fixed_board_mean": 107.875,
+      "fixed_board_scores": [
+        104,
+        120,
+        104,
+        95,
+        138,
+        99,
+        100,
+        103
+      ],
+      "random_board_mean": 108.0,
+      "combined_score": 107.925
+    },
+    {
+      "trial": 19,
+      "params": {
+        "top_k": 30,
+        "learning_rate": 0.0001,
+        "n_steps": 1024,
+        "batch_size": 32,
+        "n_epochs": 5,
+        "gamma": 0.999,
+        "gae_lambda": 0.9,
+        "n_envs": 8
+      },
+      "fixed_board_mean": 104.0,
+      "fixed_board_scores": [
+        105,
+        114,
+        102,
+        101,
+        125,
+        103,
+        99,
+        83
+      ],
+      "random_board_mean": 108.73333333333333,
+      "combined_score": 105.89333333333335
+    },
+    {
+      "trial": 20,
+      "params": {
+        "top_k": 30,
+        "learning_rate": 0.0003,
+        "n_steps": 1024,
+        "batch_size": 64,
+        "n_epochs": 5,
+        "gamma": 0.999,
+        "gae_lambda": 0.9,
+        "n_envs": 2
+      },
+      "fixed_board_mean": 105.875,
+      "fixed_board_scores": [
+        109,
+        122,
+        101,
+        98,
+        112,
+        111,
+        100,
+        94
+      ],
+      "random_board_mean": 109.26666666666667,
+      "combined_score": 107.23166666666667
+    }
+  ]
+}

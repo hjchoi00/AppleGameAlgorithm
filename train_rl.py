@@ -94,11 +94,11 @@ def make_env_topk(board_dir="board_mat", rank=0, top_k=20):
 
 def train_ppo(
     total_timesteps=100000,
-    learning_rate=3e-4,
-    n_steps=4096,
-    batch_size=256,
+    learning_rate=0.0001,
+    n_steps=2048,
+    batch_size=128,
     n_epochs=10,
-    n_envs=4,
+    n_envs=2,
     save_path="models/ppo_apple"
 ):
     """MaskablePPO 학습 (Action Masking 적용)"""
@@ -126,8 +126,8 @@ def train_ppo(
         n_steps=n_steps,
         batch_size=batch_size,
         n_epochs=n_epochs,
-        gamma=0.995,
-        gae_lambda=0.97,
+        gamma=0.999,
+        gae_lambda=0.99,
         clip_range=0.2,
         verbose=1,
         device=device
