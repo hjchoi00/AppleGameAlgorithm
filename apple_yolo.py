@@ -222,18 +222,98 @@ def main():
     # board_mat 폴더가 없으면 생성
     board_mat_dir.mkdir(exist_ok=True)
     
-    # 명령줄 인자 처리
+    def get_board_number(filename):
+        """파일명에서 숫자 추출 (예: image1.png -> 1)"""
+        base_name = os.path.splitext(filename)[0]
+        numbers = re.findall(r'\d+', base_name)
+        return numbers[-1] if numbers else base_name
+    
+    def process_single_image(yolo, image_path, output_path):
+        """단일 이미지 처리"""
+        print(f"\n🎯 이미지 처리: {image_path.name}")
+        print("-" * 40)
+        
+        matrix = yolo.image_to_matrix(str(image_path))
+        
+        if matrix:
+            yolo.print_matrix(matrix)
+            yolo.save_matrix(matrix, str(output_path))
+            print(f"✅ 저장 완료: {output_path.name}")
+            return True
+        else:
+            print(f"❌ 변환 실패: {image_path.name}")
+            return False
+    
+    # 명령줄 인자가 없으면 자동 일괄 변환 모드
     if len(sys.argv) < 2:
         print("=" * 50)
-        print("🍎 YOLO 기반 사과 게임 숫자 추출기")
+        print("🍎 YOLO 기반 사과 게임 숫자 추출기 (일괄 변환)")
         print("=" * 50)
-        print("\n사용법: python apple_yolo.py <이미지파일명>")
-        print("예시: python apple_yolo.py image1.png")
-        print("      → board_img/image1.png 에서 읽어서")
-        print("      → board_mat/board1.txt 로 저장")
-        sys.exit(1)
+        
+        # board_img 폴더의 모든 이미지 파일
+        if not board_img_dir.exists():
+            print(f"❌ '{board_img_dir}' 폴더가 없습니다.")
+            sys.exit(1)
+        
+        image_files = [f for f in os.listdir(board_img_dir) 
+                       if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        
+        if not image_files:
+            print("⚠️ board_img 폴더에 이미지가 없습니다.")
+            sys.exit(0)
+        
+        # board_mat에 이미 있는 보드 번호 확인
+        existing_boards = set()
+        if board_mat_dir.exists():
+            for f in os.listdir(board_mat_dir):
+                if f.endswith('.txt'):
+                    numbers = re.findall(r'\d+', f)
+                    if numbers:
+                        existing_boards.add(numbers[-1])
+        
+        # 변환 안 된 이미지 찾기
+        to_convert = []
+        for img_file in image_files:
+            board_num = get_board_number(img_file)
+            if board_num not in existing_boards:
+                to_convert.append((img_file, board_num))
+        
+        if not to_convert:
+            print("✅ 모든 이미지가 이미 변환되어 있습니다.")
+            print(f"   - board_img: {len(image_files)}개 이미지")
+            print(f"   - board_mat: {len(existing_boards)}개 행렬")
+            sys.exit(0)
+        
+        print(f"\n📊 변환 대상: {len(to_convert)}개 이미지")
+        for img_file, board_num in to_convert:
+            print(f"   - {img_file} → board{board_num}.txt")
+        
+        # YOLO 객체 생성 (한 번만)
+        print("\n" + "=" * 50)
+        yolo = AppleGameYOLO()
+        
+        # 일괄 변환
+        success_count = 0
+        fail_count = 0
+        
+        for img_file, board_num in to_convert:
+            image_path = board_img_dir / img_file
+            output_path = board_mat_dir / f"board{board_num}.txt"
+            
+            if process_single_image(yolo, image_path, output_path):
+                success_count += 1
+            else:
+                fail_count += 1
+        
+        # 결과 요약
+        print("\n" + "=" * 50)
+        print("📋 변환 완료!")
+        print(f"   ✅ 성공: {success_count}개")
+        if fail_count > 0:
+            print(f"   ❌ 실패: {fail_count}개")
+        sys.exit(0)
     
-    # 이미지 파일명
+    # 특정 이미지 파일 지정된 경우 (기존 동작)
     image_name = sys.argv[1]
     image_path = board_img_dir / image_name
     
@@ -267,13 +347,8 @@ def main():
         yolo.print_matrix(matrix)
         
         # 출력 파일명 생성: image1.png -> board1.txt
-        base_name = os.path.splitext(image_name)[0]  # 확장자 제거
-        # 숫자 추출 (예: image1 -> 1, capture123 -> 123)
-        numbers = re.findall(r'\d+', base_name)
-        if numbers:
-            output_name = f"board{numbers[-1]}.txt"  # 마지막 숫자 사용
-        else:
-            output_name = f"board_{base_name}.txt"  # 숫자가 없으면 원본 이름 사용
+        board_num = get_board_number(image_name)
+        output_name = f"board{board_num}.txt"
         
         output_path = board_mat_dir / output_name
         yolo.save_matrix(matrix, str(output_path))
