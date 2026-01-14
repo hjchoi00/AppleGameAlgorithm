@@ -26,7 +26,10 @@ except ImportError:
     print("⚠️ sb3-contrib가 설치되지 않았습니다. pip install sb3-contrib")
 
 # 환경
-from apple_env import AppleGameEnv, AppleGameEnvWithMask, AppleGameEnvTopK, AppleGameEnvTopKFlat
+from apple_env import (
+    AppleGameEnv, AppleGameEnvWithMask, AppleGameEnvTopK, AppleGameEnvTopKFlat,
+    AppleGameEnvLearnedTopK, AppleGameEnvAllCandidates, CandidateScorer
+)
 
 # 기존 알고리즘 비교용
 from main import (
@@ -216,6 +219,223 @@ def train_ppo_topk(
     print(f"✅ 모델 저장: {save_path}")
     
     return model, top_k
+
+
+# ============================================================
+# 학습된 Scorer로 Top-K 선별 (AI가 후보를 만드는 방식)
+# ============================================================
+
+def make_env_all_candidates(board_dir="board_mat", rank=0, max_candidates=100):
+    """모든 후보를 제공하는 환경 생성"""
+    def _init():
+        env = AppleGameEnvAllCandidates(board_dir=board_dir, max_candidates=max_candidates)
+        env = ActionMasker(env, mask_fn)
+        env = Monitor(env)
+        return env
+    return _init
+
+
+def train_scorer_from_policy(
+    policy_model,
+    n_episodes=1000,
+    max_candidates=100,
+    save_path="models/candidate_scorer.pt"
+):
+    """
+    학습된 PPO policy의 action probability를 사용해서 CandidateScorer 학습
+    
+    원리:
+    1. 모든 후보에 대해 policy의 action probability를 구함
+    2. 높은 확률을 받은 후보 = "좋은 후보"로 간주
+    3. 이 probability를 target으로 Scorer 네트워크를 학습
+    """
+    print("=" * 60)
+    print("🎓 CandidateScorer 학습 (Policy → Scorer 지식 증류)")
+    print("=" * 60)
+    
+    # Scorer 초기화 (6개 특징: cells, next_candidates_ratio, r1, c1, r2, c2)
+    scorer = CandidateScorer(input_dim=6, hidden_dim=64)
+    optimizer = torch.optim.Adam(scorer.parameters(), lr=1e-3)
+    criterion = torch.nn.MSELoss()
+    
+    # 데이터 수집 환경
+    env = AppleGameEnvAllCandidates(board_dir="board_mat", max_candidates=max_candidates)
+    
+    all_features = []
+    all_targets = []
+    
+    # 모델 디바이스 확인
+    device = next(policy_model.policy.parameters()).device
+    
+    print(f"📊 {n_episodes} 에피소드에서 데이터 수집 중...")
+    
+    for ep in range(n_episodes):
+        obs, info = env.reset()
+        
+        while True:
+            if not env.candidates:
+                break
+            
+            # 현재 후보들의 특징 추출 (board 전달)
+            features = scorer._extract_features(
+                env.candidates, env.board, env.board_height, env.board_width
+            )
+            
+            # Policy의 action probability 구하기
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+            with torch.no_grad():
+                # MaskablePPO의 policy에서 확률 추출
+                dist = policy_model.policy.get_distribution(obs_tensor)
+                action_probs = dist.distribution.probs[0].cpu().numpy()
+            
+            # 유효한 후보에 대한 확률만 추출
+            n_valid = len(env.candidates)
+            valid_probs = action_probs[:n_valid]
+            
+            # 정규화 (합이 1이 되도록)
+            if valid_probs.sum() > 0:
+                valid_probs = valid_probs / valid_probs.sum()
+            
+            # 데이터 저장
+            all_features.append(features)
+            all_targets.append(valid_probs)
+            
+            # 다음 스텝
+            action, _ = policy_model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            
+            if terminated or truncated:
+                break
+        
+        if (ep + 1) % 100 == 0:
+            print(f"  에피소드 {ep + 1}/{n_episodes} 완료")
+    
+    # 학습 데이터 준비
+    print(f"\n🔧 Scorer 학습 중...")
+    
+    # 각 데이터를 개별 샘플로 변환
+    X_list = []
+    y_list = []
+    for features, probs in zip(all_features, all_targets):
+        for i in range(len(probs)):
+            X_list.append(features[i])
+            y_list.append(probs[i])
+    
+    X = torch.FloatTensor(np.array(X_list))
+    y = torch.FloatTensor(np.array(y_list))
+    
+    print(f"  총 샘플 수: {len(X)}")
+    
+    # 미니배치 학습
+    batch_size = 256
+    n_epochs = 50
+    
+    for epoch in range(n_epochs):
+        indices = torch.randperm(len(X))
+        total_loss = 0
+        n_batches = 0
+        
+        for i in range(0, len(X), batch_size):
+            batch_idx = indices[i:i+batch_size]
+            batch_X = X[batch_idx]
+            batch_y = y[batch_idx]
+            
+            # Forward
+            pred = scorer(batch_X)
+            loss = criterion(pred, batch_y)
+            
+            # Backward
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            total_loss += loss.item()
+            n_batches += 1
+        
+        if (epoch + 1) % 10 == 0:
+            print(f"  Epoch {epoch + 1}/{n_epochs}, Loss: {total_loss / n_batches:.6f}")
+    
+    # 저장
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    torch.save(scorer.state_dict(), save_path)
+    print(f"✅ Scorer 저장: {save_path}")
+    
+    return scorer
+
+
+def make_env_learned_topk(board_dir="board_mat", rank=0, top_k=20, scorer=None):
+    """학습된 Scorer를 사용하는 Top-K 환경 생성"""
+    def _init():
+        env = AppleGameEnvLearnedTopK(
+            board_dir=board_dir, 
+            top_k=top_k, 
+            scorer=scorer,
+            train_scorer=False
+        )
+        env = ActionMasker(env, mask_fn)
+        env = Monitor(env)
+        return env
+    return _init
+
+
+def train_with_learned_scorer(
+    scorer_path="models/candidate_scorer.pt",
+    total_timesteps=100000,
+    top_k=20,
+    n_envs=4,
+    save_path="models/ppo_learned_topk"
+):
+    """
+    학습된 Scorer로 Top-K를 선별하면서 PPO 학습
+    
+    기존: 규칙 기반 Top-K → PPO 선택
+    새로운: Scorer 기반 Top-K → PPO 선택
+    """
+    print("=" * 60)
+    print(f"🧠 MaskablePPO + Learned Scorer Top-{top_k} 학습")
+    print("=" * 60)
+    
+    # Scorer 로드
+    scorer = CandidateScorer()
+    scorer.load_state_dict(torch.load(scorer_path))
+    scorer.eval()
+    print(f"✅ Scorer 로드: {scorer_path}")
+    
+    # 환경 생성
+    env = DummyVecEnv([
+        make_env_learned_topk(rank=i, top_k=top_k, scorer=scorer) 
+        for i in range(n_envs)
+    ])
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"🖥️ 사용 디바이스: {device}")
+    print(f"🎯 Top-K: {top_k} (학습된 Scorer로 선별)")
+    
+    # MaskablePPO 모델 생성
+    model = MaskablePPO(
+        "MlpPolicy",
+        env,
+        learning_rate=3e-4,
+        n_steps=2048,
+        batch_size=64,
+        n_epochs=10,
+        gamma=0.995,
+        gae_lambda=0.97,
+        clip_range=0.2,
+        verbose=1,
+        device=device
+    )
+    
+    callback = LoggingCallback(log_freq=5000)
+    
+    print(f"총 {total_timesteps:,} 스텝 학습 예정")
+    model.learn(total_timesteps=total_timesteps, callback=callback)
+    
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    model.save(save_path)
+    print(f"✅ 모델 저장: {save_path}")
+    
+    return model, top_k, scorer
 
 
 def evaluate_model(model, env, n_episodes=10):
@@ -560,13 +780,16 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="사과게임 강화학습")
-    parser.add_argument("--mode", type=str, default="train", choices=["train", "eval", "play", "compare", "search"])
+    parser.add_argument("--mode", type=str, default="train", 
+                        choices=["train", "eval", "play", "compare", "search", "train_scorer", "train_learned"])
     parser.add_argument("--timesteps", type=int, default=100000)
     parser.add_argument("--topk", type=int, default=20, help="Top-K 후보 수 (기본: 20)")
     parser.add_argument("--model", type=str, default=None, help="평가/플레이할 모델 경로")
+    parser.add_argument("--scorer", type=str, default=None, help="Scorer 모델 경로")
     parser.add_argument("--board", type=str, default=None, help="특정 보드로 플레이")
     parser.add_argument("--n_trials", type=int, default=20, help="랜덤 서치 시도 횟수")
     parser.add_argument("--trial_timesteps", type=int, default=50000, help="시도당 학습 스텝")
+    parser.add_argument("--max_candidates", type=int, default=100, help="전체 후보 환경의 최대 후보 수")
     args = parser.parse_args()
     
     if args.mode == "train":
@@ -645,3 +868,71 @@ if __name__ == "__main__":
         )
         print(f"\n🏆 최적 파라미터: {best_params}")
         print(f"🏆 최고 점수: {best_score:.1f}")
+    
+    elif args.mode == "train_scorer":
+        # Step 1: 모든 후보 환경에서 PPO 학습
+        print("=" * 70)
+        print("🎯 Step 1: 모든 후보 환경에서 PPO 학습")
+        print("=" * 70)
+        
+        # 모든 후보 환경으로 학습
+        env = DummyVecEnv([
+            make_env_all_candidates(max_candidates=args.max_candidates) 
+            for _ in range(4)
+        ])
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        base_model = MaskablePPO(
+            "MlpPolicy",
+            env,
+            learning_rate=3e-4,
+            n_steps=2048,
+            batch_size=64,
+            n_epochs=10,
+            gamma=0.995,
+            gae_lambda=0.97,
+            verbose=1,
+            device=device
+        )
+        
+        print(f"총 {args.timesteps:,} 스텝 학습 (전체 후보 환경)")
+        base_model.learn(total_timesteps=args.timesteps, callback=LoggingCallback(log_freq=5000))
+        base_model.save("models/ppo_all_candidates")
+        print("✅ 기반 모델 저장: models/ppo_all_candidates")
+        
+        # Step 2: Policy에서 Scorer 학습
+        print("\n" + "=" * 70)
+        print("🎯 Step 2: Policy → Scorer 지식 증류")
+        print("=" * 70)
+        
+        scorer = train_scorer_from_policy(
+            base_model,
+            n_episodes=500,
+            max_candidates=args.max_candidates,
+            save_path="models/candidate_scorer.pt"
+        )
+        
+        print("\n✅ Scorer 학습 완료!")
+        print("다음 단계: python train_rl.py --mode train_learned --topk 20")
+    
+    elif args.mode == "train_learned":
+        # 학습된 Scorer로 Top-K 선별하면서 PPO 학습
+        scorer_path = args.scorer or "models/candidate_scorer.pt"
+        
+        if not os.path.exists(scorer_path):
+            print(f"❌ Scorer 파일을 찾을 수 없습니다: {scorer_path}")
+            print("먼저 --mode train_scorer를 실행하세요.")
+        else:
+            model, top_k_value, scorer = train_with_learned_scorer(
+                scorer_path=scorer_path,
+                total_timesteps=args.timesteps,
+                top_k=args.topk,
+                save_path="models/ppo_learned_topk"
+            )
+            
+            # 평가
+            print("\n📊 학습된 모델 평가 중...")
+            eval_env = make_env_learned_topk(top_k=top_k_value, scorer=scorer)()
+            results = evaluate_model(model, eval_env, n_episodes=20)
+            print(f"평균 점수: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
+            print(f"최고 점수: {results['max_score']}")
