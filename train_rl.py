@@ -5,9 +5,24 @@ MaskablePPO를 사용하여 최적 전략 학습
 """
 
 import os
+import random
 import numpy as np
 import torch
 from datetime import datetime
+
+
+def set_seed(seed=42):
+    """재현성을 위한 seed 고정"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    print(f"🎲 Seed 고정: {seed}")
+
 
 # Stable Baselines 3
 from stable_baselines3 import PPO
@@ -431,15 +446,91 @@ def train_with_learned_scorer(
     print(f"총 {total_timesteps:,} 스텝 학습 예정")
     model.learn(total_timesteps=total_timesteps, callback=callback)
     
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    model.save(save_path)
-    print(f"✅ 모델 저장: {save_path}")
+    # topk 값을 포함한 저장 경로 생성
+    final_save_path = f"{save_path}_top{top_k}"
+    os.makedirs(os.path.dirname(final_save_path), exist_ok=True)
+    model.save(final_save_path)
+    print(f"✅ 모델 저장: {final_save_path}")
     
     return model, top_k, scorer
 
 
+def evaluate_model_on_all_boards(model, env_factory, board_dir="board_mat", verbose=False):
+    """
+    board_mat의 모든 보드에서 평가 (고정 보드 전체 평가)
+    
+    Args:
+        model: 학습된 모델
+        env_factory: 환경 생성 함수 (예: make_env_topk(top_k=20) 또는 make_env(use_mask=True))
+        board_dir: 보드 파일 디렉토리
+        verbose: 각 보드별 점수 출력 여부
+    """
+    # 모든 보드 파일 로드
+    board_files = sorted([
+        os.path.join(board_dir, f) 
+        for f in os.listdir(board_dir) 
+        if f.endswith(".txt")
+    ])
+    
+    if not board_files:
+        print(f"⚠️ {board_dir}에 보드 파일이 없습니다.")
+        return None
+    
+    scores = []
+    steps_list = []
+    
+    for board_path in board_files:
+        mat = read_matrix(board_path)
+        board_name = os.path.basename(board_path)
+        
+        # 환경 생성 및 초기화
+        env = env_factory()
+        env.reset()
+        
+        # 보드 교체
+        unwrapped = env.unwrapped
+        unwrapped.board = mat.copy().astype(np.int32)
+        
+        # 환경 타입에 따라 후보 초기화
+        if hasattr(unwrapped, 'all_candidates'):
+            # TopK 환경
+            unwrapped.all_candidates = list(find_candidates_fast(unwrapped.board))
+            unwrapped.top_candidates = unwrapped._select_top_k(unwrapped.all_candidates)
+            unwrapped.prev_num_candidates = len(unwrapped.all_candidates)
+        else:
+            # 기본 환경
+            unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
+        
+        unwrapped.total_score = 0
+        unwrapped.steps = 0
+        obs = unwrapped._get_obs()
+        
+        # 플레이
+        while True:
+            action, _ = model.predict(obs, deterministic=True)
+            obs, reward, terminated, truncated, info = env.step(action)
+            if terminated or truncated:
+                break
+        
+        scores.append(info["total_score"])
+        steps_list.append(info["steps"])
+        
+        if verbose:
+            print(f"  {board_name}: {info['total_score']} 점")
+    
+    return {
+        "mean_score": np.mean(scores),
+        "std_score": np.std(scores),
+        "max_score": np.max(scores),
+        "min_score": np.min(scores),
+        "mean_steps": np.mean(steps_list),
+        "n_boards": len(board_files),
+        "scores": scores
+    }
+
+
 def evaluate_model(model, env, n_episodes=10):
-    """학습된 모델 평가 (env는 make_env_topk로 생성된 wrapped env)"""
+    """학습된 모델 평가 (랜덤 보드 n_episodes 방식 - 레거시)"""
     scores = []
     steps_list = []
     
@@ -688,43 +779,26 @@ def randomized_search(
                         break
                 eval_scores.append(info["total_score"])
             
-            # 랜덤 보드에서도 평가
-            random_env = make_env_topk(top_k=params["top_k"])()
-            random_scores = []
-            for _ in range(eval_episodes):
-                obs, _ = random_env.reset()
-                while True:
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, reward, terminated, truncated, info = random_env.step(action)
-                    if terminated or truncated:
-                        random_scores.append(info["total_score"])
-                        break
-            
-            # 점수 계산 (고정 보드 + 랜덤 보드 평균)
+            # 실제 보드에서만 평가 (랜덤 보드 제거)
             fixed_mean = np.mean(eval_scores)
-            random_mean = np.mean(random_scores)
-            combined_score = 0.6 * fixed_mean + 0.4 * random_mean  # 고정 보드 중시
             
             result = {
                 "trial": trial + 1,
                 "params": params,
                 "fixed_board_mean": fixed_mean,
                 "fixed_board_scores": eval_scores,
-                "random_board_mean": random_mean,
-                "combined_score": combined_score
+                "combined_score": fixed_mean
             }
             results.append(result)
             
-            print(f"✅ 고정 보드 평균: {fixed_mean:.1f}")
-            print(f"✅ 랜덤 보드 평균: {random_mean:.1f}")
-            print(f"✅ 종합 점수: {combined_score:.1f}")
+            print(f"✅ 실제 보드 평균: {fixed_mean:.1f}")
             
             # 최고 점수 갱신
-            if combined_score > best_score:
-                best_score = combined_score
+            if fixed_mean > best_score:
+                best_score = fixed_mean
                 best_params = params.copy()
                 best_model = model
-                print(f"🏆 새로운 최고 점수! ({combined_score:.1f})")
+                print(f"🏆 새로운 최고 점수! ({fixed_mean:.1f})")
                 
         except Exception as e:
             print(f"❌ Trial {trial + 1} 실패: {e}")
@@ -745,8 +819,8 @@ def randomized_search(
     
     print(f"\n🏅 Top 5 결과:")
     for i, r in enumerate(successful[:5], 1):
-        print(f"\n{i}. 종합 점수: {r['combined_score']:.1f}")
-        print(f"   고정 보드: {r['fixed_board_mean']:.1f}, 랜덤 보드: {r['random_board_mean']:.1f}")
+        print(f"\n{i}. 점수: {r['combined_score']:.1f}")
+        print(f"   실제 보드 평균: {r['fixed_board_mean']:.1f}")
         print(f"   파라미터: {r['params']}")
     
     print(f"\n🏆 최적 파라미터:")
@@ -781,7 +855,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="사과게임 강화학습")
     parser.add_argument("--mode", type=str, default="train", 
-                        choices=["train", "eval", "play", "compare", "search", "train_scorer", "train_learned"])
+                        choices=["train", "train_base", "eval", "play", "compare", "search", "train_scorer", "train_learned"])
     parser.add_argument("--timesteps", type=int, default=100000)
     parser.add_argument("--topk", type=int, default=20, help="Top-K 후보 수 (기본: 20)")
     parser.add_argument("--model", type=str, default=None, help="평가/플레이할 모델 경로")
@@ -790,19 +864,85 @@ if __name__ == "__main__":
     parser.add_argument("--n_trials", type=int, default=20, help="랜덤 서치 시도 횟수")
     parser.add_argument("--trial_timesteps", type=int, default=50000, help="시도당 학습 스텝")
     parser.add_argument("--max_candidates", type=int, default=100, help="전체 후보 환경의 최대 후보 수")
+    parser.add_argument("--seed", type=int, default=42, help="재현성을 위한 랜덤 시드 (기본: 42, -1이면 랜덤)")
     args = parser.parse_args()
     
-    if args.mode == "train":
+    # Seed 고정 (-1이면 랜덤)
+    if args.seed >= 0:
+        set_seed(args.seed)
+    else:
+        print("🎲 Seed: 랜덤 (고정 안함)")
+    
+    if args.mode == "train_base":
+        # 기본 학습 (Top-K 없이, Scorer 없이, 모든 후보 직접 선택)
+        print("=" * 60)
+        print("🧠 기본 MaskablePPO 학습 (Top-K 없음)")
+        print("=" * 60)
+        model = train_ppo(total_timesteps=args.timesteps)
+        
+        # 학습 후 평가 (고정 보드 전체 평가)
+        print("\n📊 학습된 모델 평가 중 (board_mat 전체 보드)...")
+        results = evaluate_model_on_all_boards(
+            model, 
+            lambda: make_env(use_mask=True)(),
+            verbose=True
+        )
+        print(f"\n📈 전체 {results['n_boards']}개 보드 평균: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
+        print(f"   최고: {results['max_score']}, 최저: {results['min_score']}")
+        
+        # 휴리스틱과 비교
+        board_files = sorted([
+            os.path.join("board_mat", f) 
+            for f in os.listdir("board_mat") 
+            if f.endswith(".txt")
+        ])
+        
+        print("\n" + "=" * 60)
+        print("📊 기본 RL 모델 vs 휴리스틱 비교")
+        print("=" * 60)
+        
+        heuristic_results = {
+            "Pair-First": [],
+            "Full-Rollout": []
+        }
+        
+        for i, board_path in enumerate(board_files):
+            mat = read_matrix(board_path)
+            board_name = os.path.basename(board_path)
+            
+            # Pair-First
+            _, score_pf, _ = solve_pair_first(mat.copy(), verbose=False)
+            heuristic_results["Pair-First"].append(score_pf)
+            
+            # Full-Rollout
+            _, score_fr, _ = solve_full_rollout(mat.copy(), top_k=30, verbose=False)
+            heuristic_results["Full-Rollout"].append(score_fr)
+            
+            print(f"\n[{board_name}]")
+            print(f"  RL Model:     {results['scores'][i]:>4}")
+            print(f"  Pair-First:   {score_pf:>4}")
+            print(f"  Full-Rollout: {score_fr:>4}")
+        
+        print("\n" + "-" * 60)
+        print("📈 평균 점수:")
+        print(f"  {'RL Model':<15}: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
+        for name, scores in heuristic_results.items():
+            print(f"  {name:<15}: {np.mean(scores):.1f} (±{np.std(scores):.1f})")
+        
+    elif args.mode == "train":
         # 학습 (MaskablePPO + Top-K)
         top_k_value = args.topk
         model, top_k_value = train_ppo_topk(total_timesteps=args.timesteps, top_k=args.topk)
         
-        # 학습 후 평가: make_env_topk와 동일한 환경 사용
-        print("\n📊 학습된 모델 평가 중...")
-        eval_env = make_env_topk(top_k=top_k_value)()
-        results = evaluate_model(model, eval_env, n_episodes=20)
-        print(f"평균 점수: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
-        print(f"최고 점수: {results['max_score']}")
+        # 학습 후 평가 (고정 보드 전체 평가)
+        print("\n📊 학습된 모델 평가 중 (board_mat 전체 보드)...")
+        results = evaluate_model_on_all_boards(
+            model, 
+            lambda: make_env_topk(top_k=top_k_value)(),
+            verbose=True
+        )
+        print(f"\n📈 전체 {results['n_boards']}개 보드 평균: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
+        print(f"   최고: {results['max_score']}, 최저: {results['min_score']}")
         
         # 휴리스틱과 비교 (board_mat 폴더의 모든 .txt 파일)
         board_files = sorted([
@@ -813,7 +953,7 @@ if __name__ == "__main__":
         compare_with_heuristics(model, board_files, top_k=top_k_value)
         
     elif args.mode == "eval":
-        # 평가만
+        # 평가만 (고정 보드 전체 평가)
         model_path = args.model or "models/ppo_topk_apple"
         top_k_value = args.topk
         
@@ -822,10 +962,14 @@ if __name__ == "__main__":
         else:
             model = PPO.load(model_path)
         
-        eval_env = make_env_topk(top_k=top_k_value)()
-        results = evaluate_model(model, eval_env, n_episodes=50)
-        print(f"평균 점수: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
-        print(f"최고/최저: {results['max_score']} / {results['min_score']}")
+        print(f"\n📊 모델 평가 중 (board_mat 전체 보드)...")
+        results = evaluate_model_on_all_boards(
+            model, 
+            lambda: make_env_topk(top_k=top_k_value)(),
+            verbose=True
+        )
+        print(f"\n📈 전체 {results['n_boards']}개 보드 평균: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
+        print(f"   최고: {results['max_score']}, 최저: {results['min_score']}")
         
     elif args.mode == "play":
         # 플레이

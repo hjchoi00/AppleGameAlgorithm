@@ -154,14 +154,9 @@ class AppleGameEnv(gym.Env):
         """새 에피소드 시작"""
         super().reset(seed=seed)
         
-        # 랜덤 보드 선택 또는 랜덤 생성
-        if random.random() < 0.5 and self.board_files:
-            # 기존 보드 파일에서 선택
-            board_path = random.choice(self.board_files)
-            self.board = read_matrix(board_path).astype(np.int32)
-        else:
-            # 랜덤 보드 생성 (1~9)
-            self.board = np.random.randint(1, 10, size=(self.board_height, self.board_width), dtype=np.int32)
+        # 실제 보드 파일에서만 선택 (랜덤 보드 생성 제거)
+        board_path = random.choice(self.board_files)
+        self.board = read_matrix(board_path).astype(np.int32)
         
         self.candidates = list(find_candidates_fast(self.board))
         self.total_score = 0
@@ -384,12 +379,9 @@ class AppleGameEnvTopK(gym.Env):
         """새 에피소드 시작"""
         super().reset(seed=seed)
         
-        # 랜덤 보드 선택 또는 랜덤 생성
-        if random.random() < 0.5 and self.board_files:
-            board_path = random.choice(self.board_files)
-            self.board = read_matrix(board_path).astype(np.int32)
-        else:
-            self.board = np.random.randint(1, 10, size=(self.board_height, self.board_width), dtype=np.int32)
+        # 실제 보드 파일에서만 선택 (랜덤 보드 생성 제거)
+        board_path = random.choice(self.board_files)
+        self.board = read_matrix(board_path).astype(np.int32)
         
         self.all_candidates = list(find_candidates_fast(self.board))
         self.top_candidates = self._select_top_k(self.all_candidates)
@@ -678,11 +670,9 @@ class AppleGameEnvAllCandidates(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
-        if random.random() < 0.5 and self.board_files:
-            board_path = random.choice(self.board_files)
-            self.board = read_matrix(board_path).astype(np.int32)
-        else:
-            self.board = np.random.randint(1, 10, size=(self.board_height, self.board_width), dtype=np.int32)
+        # 실제 보드 파일에서만 선택 (랜덤 보드 생성 제거)
+        board_path = random.choice(self.board_files)
+        self.board = read_matrix(board_path).astype(np.int32)
         
         self.candidates = list(find_candidates_fast(self.board))
         # 후보가 너무 많으면 랜덤 샘플링
