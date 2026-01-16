@@ -34,17 +34,13 @@ from stable_baselines3.common.monitor import Monitor
 try:
     from sb3_contrib import MaskablePPO
     from sb3_contrib.common.wrappers import ActionMasker
-    from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
     MASKABLE_AVAILABLE = True
 except ImportError:
     MASKABLE_AVAILABLE = False
     print("⚠️ sb3-contrib가 설치되지 않았습니다. pip install sb3-contrib")
 
 # 환경
-from apple_env import (
-    AppleGameEnv, AppleGameEnvWithMask, AppleGameEnvTopK, AppleGameEnvTopKFlat,
-    AppleGameEnvLearnedTopK, AppleGameEnvAllCandidates, CandidateScorer
-)
+from apple_env import AppleGameEnv, AppleGameEnvWithMask
 
 # 기존 알고리즘 비교용
 from main import (
@@ -90,21 +86,9 @@ def make_env(board_dir="board_mat", rank=0, use_mask=False):
     def _init():
         if use_mask:
             env = AppleGameEnvWithMask(board_dir=board_dir)
-            # ActionMasker wrapper 적용 (마스킹 명시적 활성화)
             env = ActionMasker(env, mask_fn)
         else:
             env = AppleGameEnv(board_dir=board_dir)
-        env = Monitor(env)
-        return env
-    return _init
-
-
-def make_env_topk(board_dir="board_mat", rank=0, top_k=20):
-    """Top-K 환경 생성 함수 (Flat 버전 - MLP Policy 호환)"""
-    def _init():
-        env = AppleGameEnvTopKFlat(board_dir=board_dir, top_k=top_k)
-        # ActionMasker wrapper 적용
-        env = ActionMasker(env, mask_fn)
         env = Monitor(env)
         return env
     return _init
@@ -169,299 +153,13 @@ def train_ppo(
     return model
 
 
-def train_ppo_topk(
-    total_timesteps=100000,
-    learning_rate=3e-4,
-    n_steps=2048,
-    batch_size=64,
-    n_epochs=10,
-    n_envs=4,
-    top_k=20,
-    save_path="models/ppo_topk_apple"
-):
-    """MaskablePPO + Top-K 학습
-    
-    휴리스틱으로 상위 K개 후보만 선택지로 제공.
-    Action space가 작아져서 학습 효율 증가.
-    """
-    print("=" * 60)
-    print(f"🧠 MaskablePPO + Top-{top_k} 학습 시작")
-    print("=" * 60)
-    
-    if not MASKABLE_AVAILABLE:
-        print("❌ sb3-contrib가 필요합니다: pip install sb3-contrib")
-        return None
-    
-    # 병렬 환경 생성 (Top-K 환경)
-    env = DummyVecEnv([make_env_topk(rank=i, top_k=top_k) for i in range(n_envs)])
-    
-    # GPU 사용 여부 확인
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🖥️ 사용 디바이스: {device}")
-    print(f"🎯 Top-K: {top_k} (휴리스틱으로 선별된 상위 {top_k}개 후보만 선택 가능)")
-    print(f"🎭 Action Masking: 활성화")
-    print(f"📊 단순 보상: cells + (종료 시 -remaining)")
-    print(f"👁️ 관측: 보드 + Top-K 후보 특징(9차원) + 마스크")
-    
-    # MaskablePPO 모델 생성
-    model = MaskablePPO(
-        "MlpPolicy",
-        env,
-        learning_rate=learning_rate,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        n_epochs=n_epochs,
-        gamma=0.995,
-        gae_lambda=0.97,
-        clip_range=0.2,
-        verbose=1,
-        device=device
-    )
-    
-    # 콜백 설정
-    callback = LoggingCallback(log_freq=5000)
-    
-    # 학습
-    print(f"총 {total_timesteps:,} 스텝 학습 예정 (환경 {n_envs}개 병렬)")
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=callback
-    )
-    
-    # 모델 저장
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    model.save(save_path)
-    print(f"✅ 모델 저장: {save_path}")
-    
-    return model, top_k
-
-
-# ============================================================
-# 학습된 Scorer로 Top-K 선별 (AI가 후보를 만드는 방식)
-# ============================================================
-
-def make_env_all_candidates(board_dir="board_mat", rank=0, max_candidates=100):
-    """모든 후보를 제공하는 환경 생성"""
-    def _init():
-        env = AppleGameEnvAllCandidates(board_dir=board_dir, max_candidates=max_candidates)
-        env = ActionMasker(env, mask_fn)
-        env = Monitor(env)
-        return env
-    return _init
-
-
-def train_scorer_from_policy(
-    policy_model,
-    n_episodes=1000,
-    max_candidates=100,
-    save_path="models/candidate_scorer.pt"
-):
-    """
-    학습된 PPO policy의 action probability를 사용해서 CandidateScorer 학습
-    
-    원리:
-    1. 모든 후보에 대해 policy의 action probability를 구함
-    2. 높은 확률을 받은 후보 = "좋은 후보"로 간주
-    3. 이 probability를 target으로 Scorer 네트워크를 학습
-    """
-    print("=" * 60)
-    print("🎓 CandidateScorer 학습 (Policy → Scorer 지식 증류)")
-    print("=" * 60)
-    
-    # Scorer 초기화 (6개 특징: cells, next_candidates_ratio, r1, c1, r2, c2)
-    scorer = CandidateScorer(input_dim=6, hidden_dim=64)
-    optimizer = torch.optim.Adam(scorer.parameters(), lr=1e-3)
-    criterion = torch.nn.MSELoss()
-    
-    # 데이터 수집 환경
-    env = AppleGameEnvAllCandidates(board_dir="board_mat", max_candidates=max_candidates)
-    
-    all_features = []
-    all_targets = []
-    
-    # 모델 디바이스 확인
-    device = next(policy_model.policy.parameters()).device
-    
-    print(f"📊 {n_episodes} 에피소드에서 데이터 수집 중...")
-    
-    for ep in range(n_episodes):
-        obs, info = env.reset()
-        
-        while True:
-            if not env.candidates:
-                break
-            
-            # 현재 후보들의 특징 추출 (board 전달)
-            features = scorer._extract_features(
-                env.candidates, env.board, env.board_height, env.board_width
-            )
-            
-            # Policy의 action probability 구하기
-            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-            with torch.no_grad():
-                # MaskablePPO의 policy에서 확률 추출
-                dist = policy_model.policy.get_distribution(obs_tensor)
-                action_probs = dist.distribution.probs[0].cpu().numpy()
-            
-            # 유효한 후보에 대한 확률만 추출
-            n_valid = len(env.candidates)
-            valid_probs = action_probs[:n_valid]
-            
-            # 정규화 (합이 1이 되도록)
-            if valid_probs.sum() > 0:
-                valid_probs = valid_probs / valid_probs.sum()
-            
-            # 데이터 저장
-            all_features.append(features)
-            all_targets.append(valid_probs)
-            
-            # 다음 스텝
-            action, _ = policy_model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            
-            if terminated or truncated:
-                break
-        
-        if (ep + 1) % 100 == 0:
-            print(f"  에피소드 {ep + 1}/{n_episodes} 완료")
-    
-    # 학습 데이터 준비
-    print(f"\n🔧 Scorer 학습 중...")
-    
-    # 각 데이터를 개별 샘플로 변환
-    X_list = []
-    y_list = []
-    for features, probs in zip(all_features, all_targets):
-        for i in range(len(probs)):
-            X_list.append(features[i])
-            y_list.append(probs[i])
-    
-    X = torch.FloatTensor(np.array(X_list))
-    y = torch.FloatTensor(np.array(y_list))
-    
-    print(f"  총 샘플 수: {len(X)}")
-    
-    # 미니배치 학습
-    batch_size = 256
-    n_epochs = 50
-    
-    for epoch in range(n_epochs):
-        indices = torch.randperm(len(X))
-        total_loss = 0
-        n_batches = 0
-        
-        for i in range(0, len(X), batch_size):
-            batch_idx = indices[i:i+batch_size]
-            batch_X = X[batch_idx]
-            batch_y = y[batch_idx]
-            
-            # Forward
-            pred = scorer(batch_X)
-            loss = criterion(pred, batch_y)
-            
-            # Backward
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            
-            total_loss += loss.item()
-            n_batches += 1
-        
-        if (epoch + 1) % 10 == 0:
-            print(f"  Epoch {epoch + 1}/{n_epochs}, Loss: {total_loss / n_batches:.6f}")
-    
-    # 저장
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    torch.save(scorer.state_dict(), save_path)
-    print(f"✅ Scorer 저장: {save_path}")
-    
-    return scorer
-
-
-def make_env_learned_topk(board_dir="board_mat", rank=0, top_k=20, scorer=None):
-    """학습된 Scorer를 사용하는 Top-K 환경 생성"""
-    def _init():
-        env = AppleGameEnvLearnedTopK(
-            board_dir=board_dir, 
-            top_k=top_k, 
-            scorer=scorer,
-            train_scorer=False
-        )
-        env = ActionMasker(env, mask_fn)
-        env = Monitor(env)
-        return env
-    return _init
-
-
-def train_with_learned_scorer(
-    scorer_path="models/candidate_scorer.pt",
-    total_timesteps=100000,
-    top_k=20,
-    n_envs=4,
-    save_path="models/ppo_learned_topk"
-):
-    """
-    학습된 Scorer로 Top-K를 선별하면서 PPO 학습
-    
-    기존: 규칙 기반 Top-K → PPO 선택
-    새로운: Scorer 기반 Top-K → PPO 선택
-    """
-    print("=" * 60)
-    print(f"🧠 MaskablePPO + Learned Scorer Top-{top_k} 학습")
-    print("=" * 60)
-    
-    # Scorer 로드
-    scorer = CandidateScorer()
-    scorer.load_state_dict(torch.load(scorer_path))
-    scorer.eval()
-    print(f"✅ Scorer 로드: {scorer_path}")
-    
-    # 환경 생성
-    env = DummyVecEnv([
-        make_env_learned_topk(rank=i, top_k=top_k, scorer=scorer) 
-        for i in range(n_envs)
-    ])
-    
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🖥️ 사용 디바이스: {device}")
-    print(f"🎯 Top-K: {top_k} (학습된 Scorer로 선별)")
-    
-    # MaskablePPO 모델 생성
-    model = MaskablePPO(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.995,
-        gae_lambda=0.97,
-        clip_range=0.2,
-        verbose=1,
-        device=device
-    )
-    
-    callback = LoggingCallback(log_freq=5000)
-    
-    print(f"총 {total_timesteps:,} 스텝 학습 예정")
-    model.learn(total_timesteps=total_timesteps, callback=callback)
-    
-    # topk 값을 포함한 저장 경로 생성
-    final_save_path = f"{save_path}_top{top_k}"
-    os.makedirs(os.path.dirname(final_save_path), exist_ok=True)
-    model.save(final_save_path)
-    print(f"✅ 모델 저장: {final_save_path}")
-    
-    return model, top_k, scorer
-
-
 def evaluate_model_on_all_boards(model, env_factory, board_dir="board_mat", verbose=False):
     """
     board_mat의 모든 보드에서 평가 (고정 보드 전체 평가)
     
     Args:
         model: 학습된 모델
-        env_factory: 환경 생성 함수 (예: make_env_topk(top_k=20) 또는 make_env(use_mask=True))
+        env_factory: 환경 생성 함수
         board_dir: 보드 파일 디렉토리
         verbose: 각 보드별 점수 출력 여부
     """
@@ -490,17 +188,7 @@ def evaluate_model_on_all_boards(model, env_factory, board_dir="board_mat", verb
         # 보드 교체
         unwrapped = env.unwrapped
         unwrapped.board = mat.copy().astype(np.int32)
-        
-        # 환경 타입에 따라 후보 초기화
-        if hasattr(unwrapped, 'all_candidates'):
-            # TopK 환경
-            unwrapped.all_candidates = list(find_candidates_fast(unwrapped.board))
-            unwrapped.top_candidates = unwrapped._select_top_k(unwrapped.all_candidates)
-            unwrapped.prev_num_candidates = len(unwrapped.all_candidates)
-        else:
-            # 기본 환경
-            unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
-        
+        unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
         unwrapped.total_score = 0
         unwrapped.steps = 0
         obs = unwrapped._get_obs()
@@ -529,38 +217,17 @@ def evaluate_model_on_all_boards(model, env_factory, board_dir="board_mat", verb
     }
 
 
-def evaluate_model(model, env, n_episodes=10):
-    """학습된 모델 평가 (랜덤 보드 n_episodes 방식 - 레거시)"""
-    scores = []
-    steps_list = []
-    
-    for ep in range(n_episodes):
-        obs, info = env.reset()
-        
-        while True:
-            # ActionMasker가 이미 적용되어 있으므로 action_masks 불필요
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
-            
-            if terminated or truncated:
-                scores.append(info["total_score"])
-                steps_list.append(info["steps"])
-                break
-    
-    return {
-        "mean_score": np.mean(scores),
-        "std_score": np.std(scores),
-        "max_score": np.max(scores),
-        "min_score": np.min(scores),
-        "mean_steps": np.mean(steps_list)
-    }
-
-
-def compare_with_heuristics(model, board_paths, verbose=True, top_k=20):
-    """학습된 모델과 기존 휴리스틱 비교 (make_env_topk와 동일한 환경 사용)"""
+def compare_with_heuristics(model, board_dir="board_mat", verbose=True):
+    """학습된 모델과 기존 휴리스틱 비교"""
     print("\n" + "=" * 60)
     print("📊 RL 모델 vs 휴리스틱 비교")
     print("=" * 60)
+    
+    board_files = sorted([
+        os.path.join(board_dir, f) 
+        for f in os.listdir(board_dir) 
+        if f.endswith(".txt")
+    ])
     
     results = {
         "RL Model": [],
@@ -568,28 +235,21 @@ def compare_with_heuristics(model, board_paths, verbose=True, top_k=20):
         "Full-Rollout": []
     }
     
-    for board_path in board_paths:
+    for board_path in board_files:
         mat = read_matrix(board_path)
         board_name = os.path.basename(board_path)
         
-        # RL 모델: make_env_topk와 동일한 wrapped 환경 사용
-        env = make_env_topk(top_k=top_k)()
-        
-        # 먼저 reset() 호출하여 Monitor 상태 초기화
+        # RL 모델
+        env = make_env(use_mask=True)()
         env.reset()
-        
-        # 그 후 보드를 원하는 보드로 교체 (Monitor -> ActionMasker -> AppleGameEnvTopKFlat)
         unwrapped = env.unwrapped
         unwrapped.board = mat.copy().astype(np.int32)
-        unwrapped.all_candidates = list(find_candidates_fast(unwrapped.board))
-        unwrapped.top_candidates = unwrapped._select_top_k(unwrapped.all_candidates)
-        unwrapped.prev_num_candidates = len(unwrapped.all_candidates)
+        unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
         unwrapped.total_score = 0
         unwrapped.steps = 0
         obs = unwrapped._get_obs()
         
-        while unwrapped.top_candidates:
-            # ActionMasker가 적용되어 있으므로 action_masks 불필요
+        while unwrapped.candidates:
             action, _ = model.predict(obs, deterministic=True)
             obs, reward, terminated, truncated, info = env.step(action)
             if terminated:
@@ -619,22 +279,17 @@ def compare_with_heuristics(model, board_paths, verbose=True, top_k=20):
     return results
 
 
-def play_with_model(model, board_path=None, render=True, top_k=20):
-    """학습된 모델로 게임 플레이 (make_env_topk와 동일한 환경 사용)"""
-    # make_env_topk와 동일한 wrapped 환경 사용
-    env = make_env_topk(top_k=top_k)()
+def play_with_model(model, board_path=None, render=True):
+    """학습된 모델로 게임 플레이"""
+    env = make_env(use_mask=True)()
     unwrapped = env.unwrapped
     unwrapped.render_mode = "human" if render else None
     
-    # 먼저 reset() 호출하여 Monitor 상태 초기화
     obs, _ = env.reset()
     
     if board_path:
-        # 보드를 원하는 보드로 교체
         unwrapped.board = read_matrix(board_path).astype(np.int32)
-        unwrapped.all_candidates = list(find_candidates_fast(unwrapped.board))
-        unwrapped.top_candidates = unwrapped._select_top_k(unwrapped.all_candidates)
-        unwrapped.prev_num_candidates = len(unwrapped.all_candidates)
+        unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
         unwrapped.total_score = 0
         unwrapped.steps = 0
         obs = unwrapped._get_obs()
@@ -643,7 +298,6 @@ def play_with_model(model, board_path=None, render=True, top_k=20):
         unwrapped.render()
     
     while True:
-        # ActionMasker가 적용되어 있으므로 action_masks 불필요
         action, _ = model.predict(obs, deterministic=True)
         obs, reward, terminated, truncated, info = env.step(action)
         
@@ -657,213 +311,15 @@ def play_with_model(model, board_path=None, render=True, top_k=20):
     return info
 
 
-def randomized_search(
-    n_trials=20,
-    timesteps_per_trial=50000,
-    eval_episodes=30,
-    save_best=True
-):
-    """
-    랜덤 서치로 최적 하이퍼파라미터 탐색
-    
-    탐색 범위:
-    - top_k: [10, 20, 30, 50]
-    - learning_rate: [1e-4, 3e-4, 1e-3]
-    - n_steps: [1024, 2048, 4096]
-    - batch_size: [32, 64, 128, 256]
-    - n_epochs: [5, 10, 15, 20]
-    - gamma: [0.99, 0.995, 0.999]
-    - gae_lambda: [0.9, 0.95, 0.97, 0.99]
-    """
-    import random
-    import json
-    from datetime import datetime
-    
-    print("=" * 70)
-    print("🔍 Randomized Search for Hyperparameter Optimization")
-    print("=" * 70)
-    
-    # 탐색 공간 정의
-    search_space = {
-        "top_k": [10, 20, 30, 50],
-        "learning_rate": [1e-4, 3e-4, 5e-4, 1e-3],
-        "n_steps": [1024, 2048, 4096],
-        "batch_size": [32, 64, 128, 256],
-        "n_epochs": [5, 10, 15, 20],
-        "gamma": [0.99, 0.995, 0.999],
-        "gae_lambda": [0.9, 0.95, 0.97, 0.99],
-        "n_envs": [2, 4, 8]
-    }
-    
-    print(f"📋 탐색 공간:")
-    for key, values in search_space.items():
-        print(f"   {key}: {values}")
-    print(f"\n🎲 총 {n_trials}회 시도, 각 {timesteps_per_trial:,} 스텝")
-    print("-" * 70)
-    
-    # 결과 저장
-    results = []
-    best_score = -float('inf')
-    best_params = None
-    best_model = None
-    
-    # 고정 보드 파일로 평가 (board_mat 폴더의 모든 .txt 파일)
-    board_files = sorted([
-        os.path.join("board_mat", f) 
-        for f in os.listdir("board_mat") 
-        if f.endswith(".txt")
-    ])
-    
-    for trial in range(n_trials):
-        print(f"\n{'='*70}")
-        print(f"🎯 Trial {trial + 1}/{n_trials}")
-        print("=" * 70)
-        
-        # 랜덤 파라미터 샘플링
-        params = {key: random.choice(values) for key, values in search_space.items()}
-        
-        # batch_size가 n_steps * n_envs보다 크면 조정
-        total_batch = params["n_steps"] * params["n_envs"]
-        if params["batch_size"] > total_batch:
-            params["batch_size"] = total_batch
-        
-        print(f"📊 파라미터: {params}")
-        
-        try:
-            # 환경 생성
-            env = DummyVecEnv([
-                make_env_topk(rank=i, top_k=params["top_k"]) 
-                for i in range(params["n_envs"])
-            ])
-            
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            
-            # 모델 생성 및 학습
-            model = MaskablePPO(
-                "MlpPolicy",
-                env,
-                learning_rate=params["learning_rate"],
-                n_steps=params["n_steps"],
-                batch_size=params["batch_size"],
-                n_epochs=params["n_epochs"],
-                gamma=params["gamma"],
-                gae_lambda=params["gae_lambda"],
-                clip_range=0.2,
-                verbose=0,
-                device=device
-            )
-            
-            model.learn(total_timesteps=timesteps_per_trial)
-            
-            # 평가: 고정 보드에서 점수 측정
-            eval_scores = []
-            for board_path in board_files:
-                mat = read_matrix(board_path)
-                eval_env = make_env_topk(top_k=params["top_k"])()
-                
-                # reset 후 보드 교체
-                eval_env.reset()
-                unwrapped = eval_env.unwrapped
-                unwrapped.board = mat.copy().astype(np.int32)
-                unwrapped.all_candidates = list(find_candidates_fast(unwrapped.board))
-                unwrapped.top_candidates = unwrapped._select_top_k(unwrapped.all_candidates)
-                unwrapped.prev_num_candidates = len(unwrapped.all_candidates)
-                unwrapped.total_score = 0
-                unwrapped.steps = 0
-                obs = unwrapped._get_obs()
-                
-                while unwrapped.top_candidates:
-                    action, _ = model.predict(obs, deterministic=True)
-                    obs, reward, terminated, truncated, info = eval_env.step(action)
-                    if terminated:
-                        break
-                eval_scores.append(info["total_score"])
-            
-            # 실제 보드에서만 평가 (랜덤 보드 제거)
-            fixed_mean = np.mean(eval_scores)
-            
-            result = {
-                "trial": trial + 1,
-                "params": params,
-                "fixed_board_mean": fixed_mean,
-                "fixed_board_scores": eval_scores,
-                "combined_score": fixed_mean
-            }
-            results.append(result)
-            
-            print(f"✅ 실제 보드 평균: {fixed_mean:.1f}")
-            
-            # 최고 점수 갱신
-            if fixed_mean > best_score:
-                best_score = fixed_mean
-                best_params = params.copy()
-                best_model = model
-                print(f"🏆 새로운 최고 점수! ({fixed_mean:.1f})")
-                
-        except Exception as e:
-            print(f"❌ Trial {trial + 1} 실패: {e}")
-            results.append({
-                "trial": trial + 1,
-                "params": params,
-                "error": str(e)
-            })
-    
-    # 결과 출력
-    print("\n" + "=" * 70)
-    print("📊 Randomized Search 결과")
-    print("=" * 70)
-    
-    # 성공한 결과만 정렬
-    successful = [r for r in results if "combined_score" in r]
-    successful.sort(key=lambda x: x["combined_score"], reverse=True)
-    
-    print(f"\n🏅 Top 5 결과:")
-    for i, r in enumerate(successful[:5], 1):
-        print(f"\n{i}. 점수: {r['combined_score']:.1f}")
-        print(f"   실제 보드 평균: {r['fixed_board_mean']:.1f}")
-        print(f"   파라미터: {r['params']}")
-    
-    print(f"\n🏆 최적 파라미터:")
-    print(f"   {best_params}")
-    print(f"   최고 점수: {best_score:.1f}")
-    
-    # 결과 저장
-    os.makedirs("search_results", exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # JSON 저장
-    results_file = f"search_results/search_{timestamp}.json"
-    with open(results_file, "w", encoding="utf-8") as f:
-        json.dump({
-            "best_params": best_params,
-            "best_score": best_score,
-            "all_results": results
-        }, f, indent=2, ensure_ascii=False)
-    print(f"\n📁 결과 저장: {results_file}")
-    
-    # 최고 모델 저장
-    if save_best and best_model:
-        model_path = f"models/best_search_{timestamp}"
-        best_model.save(model_path)
-        print(f"📁 최고 모델 저장: {model_path}")
-    
-    return best_params, best_score, results
-
-
 if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser(description="사과게임 강화학습")
     parser.add_argument("--mode", type=str, default="train", 
-                        choices=["train", "train_base", "eval", "play", "compare", "search", "train_scorer", "train_learned"])
+                        choices=["train", "eval", "play", "compare"])
     parser.add_argument("--timesteps", type=int, default=100000)
-    parser.add_argument("--topk", type=int, default=20, help="Top-K 후보 수 (기본: 20)")
     parser.add_argument("--model", type=str, default=None, help="평가/플레이할 모델 경로")
-    parser.add_argument("--scorer", type=str, default=None, help="Scorer 모델 경로")
     parser.add_argument("--board", type=str, default=None, help="특정 보드로 플레이")
-    parser.add_argument("--n_trials", type=int, default=20, help="랜덤 서치 시도 횟수")
-    parser.add_argument("--trial_timesteps", type=int, default=50000, help="시도당 학습 스텝")
-    parser.add_argument("--max_candidates", type=int, default=100, help="전체 후보 환경의 최대 후보 수")
     parser.add_argument("--seed", type=int, default=42, help="재현성을 위한 랜덤 시드 (기본: 42, -1이면 랜덤)")
     args = parser.parse_args()
     
@@ -873,10 +329,10 @@ if __name__ == "__main__":
     else:
         print("🎲 Seed: 랜덤 (고정 안함)")
     
-    if args.mode == "train_base":
-        # 기본 학습 (Top-K 없이, Scorer 없이, 모든 후보 직접 선택)
+    if args.mode == "train":
+        # 학습 (MaskablePPO)
         print("=" * 60)
-        print("🧠 기본 MaskablePPO 학습 (Top-K 없음)")
+        print("🧠 MaskablePPO 학습")
         print("=" * 60)
         model = train_ppo(total_timesteps=args.timesteps)
         
@@ -891,71 +347,11 @@ if __name__ == "__main__":
         print(f"   최고: {results['max_score']}, 최저: {results['min_score']}")
         
         # 휴리스틱과 비교
-        board_files = sorted([
-            os.path.join("board_mat", f) 
-            for f in os.listdir("board_mat") 
-            if f.endswith(".txt")
-        ])
-        
-        print("\n" + "=" * 60)
-        print("📊 기본 RL 모델 vs 휴리스틱 비교")
-        print("=" * 60)
-        
-        heuristic_results = {
-            "Pair-First": [],
-            "Full-Rollout": []
-        }
-        
-        for i, board_path in enumerate(board_files):
-            mat = read_matrix(board_path)
-            board_name = os.path.basename(board_path)
-            
-            # Pair-First
-            _, score_pf, _ = solve_pair_first(mat.copy(), verbose=False)
-            heuristic_results["Pair-First"].append(score_pf)
-            
-            # Full-Rollout
-            _, score_fr, _ = solve_full_rollout(mat.copy(), top_k=30, verbose=False)
-            heuristic_results["Full-Rollout"].append(score_fr)
-            
-            print(f"\n[{board_name}]")
-            print(f"  RL Model:     {results['scores'][i]:>4}")
-            print(f"  Pair-First:   {score_pf:>4}")
-            print(f"  Full-Rollout: {score_fr:>4}")
-        
-        print("\n" + "-" * 60)
-        print("📈 평균 점수:")
-        print(f"  {'RL Model':<15}: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
-        for name, scores in heuristic_results.items():
-            print(f"  {name:<15}: {np.mean(scores):.1f} (±{np.std(scores):.1f})")
-        
-    elif args.mode == "train":
-        # 학습 (MaskablePPO + Top-K)
-        top_k_value = args.topk
-        model, top_k_value = train_ppo_topk(total_timesteps=args.timesteps, top_k=args.topk)
-        
-        # 학습 후 평가 (고정 보드 전체 평가)
-        print("\n📊 학습된 모델 평가 중 (board_mat 전체 보드)...")
-        results = evaluate_model_on_all_boards(
-            model, 
-            lambda: make_env_topk(top_k=top_k_value)(),
-            verbose=True
-        )
-        print(f"\n📈 전체 {results['n_boards']}개 보드 평균: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
-        print(f"   최고: {results['max_score']}, 최저: {results['min_score']}")
-        
-        # 휴리스틱과 비교 (board_mat 폴더의 모든 .txt 파일)
-        board_files = sorted([
-            os.path.join("board_mat", f) 
-            for f in os.listdir("board_mat") 
-            if f.endswith(".txt")
-        ])
-        compare_with_heuristics(model, board_files, top_k=top_k_value)
+        compare_with_heuristics(model)
         
     elif args.mode == "eval":
         # 평가만 (고정 보드 전체 평가)
-        model_path = args.model or "models/ppo_topk_apple"
-        top_k_value = args.topk
+        model_path = args.model or "models/ppo_apple"
         
         if MASKABLE_AVAILABLE:
             model = MaskablePPO.load(model_path)
@@ -965,7 +361,7 @@ if __name__ == "__main__":
         print(f"\n📊 모델 평가 중 (board_mat 전체 보드)...")
         results = evaluate_model_on_all_boards(
             model, 
-            lambda: make_env_topk(top_k=top_k_value)(),
+            lambda: make_env(use_mask=True)(),
             verbose=True
         )
         print(f"\n📈 전체 {results['n_boards']}개 보드 평균: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
@@ -973,8 +369,7 @@ if __name__ == "__main__":
         
     elif args.mode == "play":
         # 플레이
-        model_path = args.model or "models/ppo_topk_apple"
-        top_k_value = args.topk
+        model_path = args.model or "models/ppo_apple"
         
         if MASKABLE_AVAILABLE:
             model = MaskablePPO.load(model_path)
@@ -982,101 +377,15 @@ if __name__ == "__main__":
             model = PPO.load(model_path)
         
         board_path = f"board_mat/{args.board}.txt" if args.board else None
-        play_with_model(model, board_path, render=True, top_k=top_k_value)
+        play_with_model(model, board_path, render=True)
         
     elif args.mode == "compare":
         # 비교
-        model_path = args.model or "models/ppo_topk_apple"
-        top_k_value = args.topk
+        model_path = args.model or "models/ppo_apple"
         
         if MASKABLE_AVAILABLE:
             model = MaskablePPO.load(model_path)
         else:
             model = PPO.load(model_path)
         
-        board_files = sorted([
-            os.path.join("board_mat", f) 
-            for f in os.listdir("board_mat") 
-            if f.endswith(".txt")
-        ])
-        compare_with_heuristics(model, board_files, top_k=top_k_value)
-    
-    elif args.mode == "search":
-        # 랜덤 서치
-        print("🔍 하이퍼파라미터 랜덤 서치 시작...")
-        best_params, best_score, results = randomized_search(
-            n_trials=args.n_trials,
-            timesteps_per_trial=args.trial_timesteps,
-            eval_episodes=30,
-            save_best=True
-        )
-        print(f"\n🏆 최적 파라미터: {best_params}")
-        print(f"🏆 최고 점수: {best_score:.1f}")
-    
-    elif args.mode == "train_scorer":
-        # Step 1: 모든 후보 환경에서 PPO 학습
-        print("=" * 70)
-        print("🎯 Step 1: 모든 후보 환경에서 PPO 학습")
-        print("=" * 70)
-        
-        # 모든 후보 환경으로 학습
-        env = DummyVecEnv([
-            make_env_all_candidates(max_candidates=args.max_candidates) 
-            for _ in range(4)
-        ])
-        
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        base_model = MaskablePPO(
-            "MlpPolicy",
-            env,
-            learning_rate=3e-4,
-            n_steps=2048,
-            batch_size=64,
-            n_epochs=10,
-            gamma=0.995,
-            gae_lambda=0.97,
-            verbose=1,
-            device=device
-        )
-        
-        print(f"총 {args.timesteps:,} 스텝 학습 (전체 후보 환경)")
-        base_model.learn(total_timesteps=args.timesteps, callback=LoggingCallback(log_freq=5000))
-        base_model.save("models/ppo_all_candidates")
-        print("✅ 기반 모델 저장: models/ppo_all_candidates")
-        
-        # Step 2: Policy에서 Scorer 학습
-        print("\n" + "=" * 70)
-        print("🎯 Step 2: Policy → Scorer 지식 증류")
-        print("=" * 70)
-        
-        scorer = train_scorer_from_policy(
-            base_model,
-            n_episodes=500,
-            max_candidates=args.max_candidates,
-            save_path="models/candidate_scorer.pt"
-        )
-        
-        print("\n✅ Scorer 학습 완료!")
-        print("다음 단계: python train_rl.py --mode train_learned --topk 20")
-    
-    elif args.mode == "train_learned":
-        # 학습된 Scorer로 Top-K 선별하면서 PPO 학습
-        scorer_path = args.scorer or "models/candidate_scorer.pt"
-        
-        if not os.path.exists(scorer_path):
-            print(f"❌ Scorer 파일을 찾을 수 없습니다: {scorer_path}")
-            print("먼저 --mode train_scorer를 실행하세요.")
-        else:
-            model, top_k_value, scorer = train_with_learned_scorer(
-                scorer_path=scorer_path,
-                total_timesteps=args.timesteps,
-                top_k=args.topk,
-                save_path="models/ppo_learned_topk"
-            )
-            
-            # 평가
-            print("\n📊 학습된 모델 평가 중...")
-            eval_env = make_env_learned_topk(top_k=top_k_value, scorer=scorer)()
-            results = evaluate_model(model, eval_env, n_episodes=20)
-            print(f"평균 점수: {results['mean_score']:.1f} (±{results['std_score']:.1f})")
-            print(f"최고 점수: {results['max_score']}")
+        compare_with_heuristics(model)
