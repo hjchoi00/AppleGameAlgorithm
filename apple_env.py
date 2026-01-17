@@ -101,8 +101,9 @@ class AppleGameEnv(gym.Env):
         # 게임 종료 시 보너스
         if terminated:
             # 남은 사과가 적을수록 보너스
-            remaining = np.sum(self.board > 0)
-            reward += max(0, 50 - remaining)  # 최대 50점 보너스
+            remaining = np.sum(self.board > 0)l,p,LookupError
+            
+            reward -= (remaining ** 1.2)
         
         return self._get_obs(), reward, terminated, truncated, self._get_info()
     
