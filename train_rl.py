@@ -9,6 +9,7 @@ import random
 import numpy as np
 import torch
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 
 def set_seed(seed=42):
@@ -50,13 +51,19 @@ from main import (
 
 
 class LoggingCallback(BaseCallback):
-    """학습 중 로그 출력 콜백"""
+    """학습 중 로그 출력 및 점수 기록 콜백"""
     
-    def __init__(self, log_freq=1000, verbose=1):
+    def __init__(self, log_freq=1000, record_freq=1000, verbose=1):
         super().__init__(verbose)
         self.log_freq = log_freq
+        self.record_freq = record_freq  # 그래프용 기록 주기
         self.episode_rewards = []
         self.episode_scores = []
+        
+        # 그래프용 데이터
+        self.timesteps_history = []
+        self.avg_score_history = []
+        self.max_score_history = []
         
     def _on_step(self) -> bool:
         # 에피소드 종료 시 기록
@@ -73,7 +80,59 @@ class LoggingCallback(BaseCallback):
             max_score = np.max(self.episode_scores[-100:]) if self.episode_scores else 0
             print(f"[Step {self.n_calls}] 최근 100 에피소드 - 평균: {avg_score:.1f}, 최고: {max_score}")
         
+        # 그래프용 데이터 기록
+        if self.n_calls % self.record_freq == 0 and self.episode_scores:
+            avg_score = np.mean(self.episode_scores[-100:])
+            max_score = np.max(self.episode_scores[-100:])
+            self.timesteps_history.append(self.n_calls)
+            self.avg_score_history.append(avg_score)
+            self.max_score_history.append(max_score)
+        
         return True
+    
+    def plot_learning_curve(self, save_path="learning_curve.png", show=True):
+        """학습 곡선 그래프 생성"""
+        import matplotlib as mpl
+        import matplotlib.pyplot as plt
+
+        # ✅ 한글 폰트 설정 (Windows)
+        mpl.rcParams["font.family"] = "Malgun Gothic"   # 맑은 고딕
+        mpl.rcParams["axes.unicode_minus"] = False      # 마이너스(−) 깨짐 방지
+        
+        if not self.timesteps_history:
+            print("⚠️ 기록된 데이터가 없습니다.")
+            return
+        
+        plt.figure(figsize=(12, 6))
+        
+        # 평균 점수
+        plt.subplot(1, 2, 1)
+        plt.plot(self.timesteps_history, self.avg_score_history, 'b-', linewidth=2, label='평균 점수 (최근 100 에피소드)')
+        plt.xlabel('Timesteps', fontsize=12)
+        plt.ylabel('Average Score', fontsize=12)
+        plt.title('학습 중 평균 점수 변화', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # 최고 점수
+        plt.subplot(1, 2, 2)
+        plt.plot(self.timesteps_history, self.max_score_history, 'r-', linewidth=2, label='최고 점수 (최근 100 에피소드)')
+        plt.xlabel('Timesteps', fontsize=12)
+        plt.ylabel('Max Score', fontsize=12)
+        plt.title('학습 중 최고 점수 변화', fontsize=14)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        plt.tight_layout()
+        
+        # 저장
+        plt.savefig(save_path, dpi=150)
+        print(f"📊 학습 곡선 저장: {save_path}")
+        
+        if show:
+            plt.show()
+        else:
+            plt.close()
 
 
 def mask_fn(env):
@@ -135,8 +194,9 @@ def train_ppo(
         device=device
     )
     
-    # 콜백 설정
-    callback = LoggingCallback(log_freq=5000)
+    # 콜백 설정 (기록 주기: total_timesteps / 100 또는 최소 1000)
+    record_freq = max(1000, total_timesteps // 100)
+    callback = LoggingCallback(log_freq=5000, record_freq=record_freq)
     
     # 학습
     print(f"총 {total_timesteps:,} 스텝 학습 예정 (환경 {n_envs}개 병렬)")
@@ -149,6 +209,12 @@ def train_ppo(
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     model.save(save_path)
     print(f"✅ 모델 저장: {save_path}")
+    
+    # 학습 곡선 그래프 생성
+    callback.plot_learning_curve(
+        save_path=save_path.replace(".zip", "") + "_learning_curve.png",
+        show=True
+    )
     
     return model
 
