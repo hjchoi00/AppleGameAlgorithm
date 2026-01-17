@@ -120,9 +120,9 @@ def train_ppo(
     print(f"🖥️ 사용 디바이스: {device}")
     print(f"🎭 Action Masking: 활성화 (유효한 후보만 선택 가능)")
     
-    # MaskablePPO 모델 생성
+    # MaskablePPO 모델 생성 (Dict observation → MultiInputPolicy)
     model = MaskablePPO(
-        "MlpPolicy",
+        "MultiInputPolicy",
         env,
         learning_rate=learning_rate,
         n_steps=n_steps,

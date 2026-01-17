@@ -1,5 +1,10 @@
 """
 apple_env.py - 사과게임 강화학습 환경 (Gymnasium 호환)
+
+특징 벡터 기반 관측 공간:
+- board: 10x17 보드 상태 (공간적 맥락)
+- action_features: 각 후보의 특징 벡터 (max_candidates x 7)
+  [r1, c1, r2, c2, cells, area, next_candidates_ratio]
 """
 
 import gymnasium as gym
@@ -12,14 +17,20 @@ from main import find_candidates_fast, apply_move_fast, read_matrix
 
 class AppleGameEnv(gym.Env):
     """
-    사과게임 강화학습 환경
+    사과게임 강화학습 환경 (특징 벡터 기반)
     
-    State: 10x17 보드 (0~9 숫자)
-    Action: 후보 리스트에서 인덱스 선택
-    Reward: 제거한 사과 개수
+    Observation (Dict):
+        - board: 10x17 보드 상태 (0~1 정규화)
+        - action_features: 후보별 특징 벡터 (max_candidates x 7)
+    
+    Action: 후보 리스트에서 인덱스 선택 (0 ~ max_candidates-1)
+    Reward: 제거한 사과 개수 + 종료 시 페널티
     """
     
     metadata = {"render_modes": ["human", "ansi"]}
+    
+    # 특징 벡터 차원
+    N_FEATURES = 7  # r1, c1, r2, c2, cells, area, next_candidates_ratio
     
     def __init__(self, board_dir="board_mat", max_candidates=500, render_mode=None):
         super().__init__()
@@ -42,12 +53,21 @@ class AppleGameEnv(gym.Env):
         sample_board = read_matrix(self.board_files[0])
         self.board_height, self.board_width = sample_board.shape
         
-        # Observation space: 보드 상태 (0~9 정규화)
-        self.observation_space = spaces.Box(
-            low=0, high=1, 
-            shape=(self.board_height, self.board_width), 
-            dtype=np.float32
-        )
+        # Observation space: Dict (board + action_features)
+        self.observation_space = spaces.Dict({
+            # 1. 보드 상태 (공간적 맥락)
+            "board": spaces.Box(
+                low=0, high=1, 
+                shape=(self.board_height, self.board_width), 
+                dtype=np.float32
+            ),
+            # 2. 후보 액션들의 특징 벡터
+            "action_features": spaces.Box(
+                low=0, high=1,
+                shape=(self.max_candidates, self.N_FEATURES),
+                dtype=np.float32
+            )
+        })
         
         # Action space: 후보 인덱스 (최대 max_candidates개)
         self.action_space = spaces.Discrete(max_candidates)
@@ -57,6 +77,9 @@ class AppleGameEnv(gym.Env):
         self.candidates = []
         self.total_score = 0
         self.steps = 0
+        
+        # 캐시: 각 후보의 다음 상태 후보 수 (step에서 재사용)
+        self._next_candidates_cache = []
         
     def reset(self, seed=None, options=None):
         """새 에피소드 시작"""
@@ -70,7 +93,20 @@ class AppleGameEnv(gym.Env):
         self.total_score = 0
         self.steps = 0
         
+        # 후보별 다음 상태 후보 수 계산 (캐시)
+        self._compute_next_candidates_cache()
+        
         return self._get_obs(), self._get_info()
+    
+    def _compute_next_candidates_cache(self):
+        """각 후보를 선택했을 때 다음 상태의 후보 수를 미리 계산"""
+        self._next_candidates_cache = []
+        for cand in self.candidates:
+            r1, c1, r2, c2, cells, area = cand
+            temp_board = self.board.copy()
+            apply_move_fast(temp_board, r1, c1, r2, c2)
+            next_count = len(list(find_candidates_fast(temp_board)))
+            self._next_candidates_cache.append(next_count)
     
     def step(self, action):
         """액션 실행"""
@@ -98,17 +134,60 @@ class AppleGameEnv(gym.Env):
         terminated = len(self.candidates) == 0
         truncated = False
         
-        # 게임 종료 시 보너스
+        # 게임 종료 시 페널티
         if terminated:
-            # 남은 사과가 적을수록 보너스
             remaining = np.sum(self.board > 0)
             reward -= (remaining ** 1.2)
+        else:
+            # 후보별 다음 상태 후보 수 계산 (캐시 업데이트)
+            self._compute_next_candidates_cache()
         
         return self._get_obs(), reward, terminated, truncated, self._get_info()
     
     def _get_obs(self):
-        """관측값 반환 (정규화된 보드)"""
-        return (self.board / 9.0).astype(np.float32)
+        """
+        관측값 반환 (Dict: board + action_features)
+        
+        action_features 각 열:
+            0: r1 / board_height (시작 행)
+            1: c1 / board_width (시작 열)
+            2: r2 / board_height (끝 행)
+            3: c2 / board_width (끝 열)
+            4: cells / 10 (제거할 사과 개수)
+            5: area / (board_height * board_width) (면적)
+            6: next_candidates / max_next (다음 상태 후보 비율 - 핵심!)
+        """
+        # 1. 보드 정규화
+        board_obs = (self.board / 9.0).astype(np.float32)
+        
+        # 2. 후보 특징 벡터 생성
+        features = np.zeros((self.max_candidates, self.N_FEATURES), dtype=np.float32)
+        
+        if self.candidates:
+            # 다음 상태 후보 수의 최대값 (정규화용)
+            max_next = max(self._next_candidates_cache) if self._next_candidates_cache else 1
+            max_next = max(max_next, 1)  # 0 방지
+            
+            max_area = self.board_height * self.board_width
+            
+            for i, cand in enumerate(self.candidates[:self.max_candidates]):
+                r1, c1, r2, c2, cells, area = cand
+                next_count = self._next_candidates_cache[i] if i < len(self._next_candidates_cache) else 0
+                
+                features[i] = [
+                    r1 / (self.board_height - 1) if self.board_height > 1 else 0,  # 0: r1
+                    c1 / (self.board_width - 1) if self.board_width > 1 else 0,    # 1: c1
+                    r2 / (self.board_height - 1) if self.board_height > 1 else 0,  # 2: r2
+                    c2 / (self.board_width - 1) if self.board_width > 1 else 0,    # 3: c2
+                    cells / 10.0,                                                   # 4: cells
+                    area / max_area,                                                # 5: area
+                    next_count / max_next,                                          # 6: next_candidates_ratio ★핵심
+                ]
+        
+        return {
+            "board": board_obs,
+            "action_features": features
+        }
     
     def _get_info(self):
         """추가 정보 반환"""
