@@ -121,7 +121,7 @@ class AppleGameEnv(gym.Env):
         # 유효한 액션인지 확인
         if not self.candidates:
             # 게임 종료
-            return self._get_obs(), 0, True, False, self._get_info()
+            return self._get_obs(), float(self.total_score), True, False, self._get_info()
         
         # 액션 인덱스를 유효 범위로 클리핑
         action = action % len(self.candidates)
@@ -131,7 +131,7 @@ class AppleGameEnv(gym.Env):
         apply_move_fast(self.board, r1, c1, r2, c2)
         
         # 보상 계산
-        reward = cells  # 제거한 사과 개수
+        # reward = cells  # 제거한 사과 개수
         self.total_score += cells
         self.steps += 1
         
@@ -142,10 +142,12 @@ class AppleGameEnv(gym.Env):
         terminated = len(self.candidates) == 0
         truncated = False
         
+        reward = 0.0
+
         # 게임 종료 시 페널티
         if terminated:
-            remaining = np.sum(self.board > 0)
-            reward -= remaining
+            # remaining = np.sum(self.board > 0)
+            reward = float(self.total_score)
         else:
             # 후보별 다음 상태 후보 수 계산 (캐시 업데이트)
             self._compute_next_candidates_cache()
