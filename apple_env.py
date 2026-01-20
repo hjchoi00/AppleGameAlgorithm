@@ -131,7 +131,7 @@ class AppleGameEnv(gym.Env):
         apply_move_fast(self.board, r1, c1, r2, c2)
         
         # 보상 계산
-        # reward = cells  # 제거한 사과 개수
+        reward = 0.5 * cells  # 제거한 사과 개수
         self.total_score += cells
         self.steps += 1
         
@@ -142,9 +142,7 @@ class AppleGameEnv(gym.Env):
         terminated = len(self.candidates) == 0
         truncated = False
         
-        reward = 0.0
-
-        # 게임 종료 시 페널티
+        # 게임 종료 시 최종 보상
         if terminated:
             # remaining = np.sum(self.board > 0)
             reward = float(self.total_score)
