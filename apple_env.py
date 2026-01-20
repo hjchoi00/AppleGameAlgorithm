@@ -11,7 +11,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import os
-import random
 from main import find_candidates_fast, apply_move_fast, read_matrix
 
 
@@ -32,12 +31,16 @@ class AppleGameEnv(gym.Env):
     # 특징 벡터 차원
     N_FEATURES = 7  # r1, c1, r2, c2, cells, area, next_candidates_ratio
     
-    def __init__(self, board_dir="board_mat", max_candidates=500, render_mode=None):
+    def __init__(self, board_dir="board_mat", max_candidates=256, render_mode=None, base_seed=None):
         super().__init__()
         
         self.board_dir = board_dir
         self.max_candidates = max_candidates
         self.render_mode = render_mode
+        
+        # 재현성을 위한 seed 관리
+        self.base_seed = base_seed
+        self.episode_idx = 0
         
         # 보드 파일 목록 로드
         self.board_files = [
@@ -83,10 +86,15 @@ class AppleGameEnv(gym.Env):
         
     def reset(self, seed=None, options=None):
         """새 에피소드 시작"""
+        # seed가 없고 base_seed가 있으면 episode_idx 기반 seed 사용
+        if seed is None and self.base_seed is not None:
+            seed = self.base_seed + self.episode_idx
+        
         super().reset(seed=seed)
+        self.episode_idx += 1
         
         # 실제 보드 파일에서만 선택
-        board_path = random.choice(self.board_files)
+        board_path = self.np_random.choice(self.board_files)
         self.board = read_matrix(board_path).astype(np.int32)
         
         self.candidates = list(find_candidates_fast(self.board))
@@ -137,7 +145,7 @@ class AppleGameEnv(gym.Env):
         # 게임 종료 시 페널티
         if terminated:
             remaining = np.sum(self.board > 0)
-            reward -= (remaining ** 1.2)
+            reward -= remaining
         else:
             # 후보별 다음 상태 후보 수 계산 (캐시 업데이트)
             self._compute_next_candidates_cache()

@@ -51,22 +51,33 @@ from main import (
 
 
 class LoggingCallback(BaseCallback):
-    """학습 중 로그 출력 및 점수 기록 콜백"""
+    """학습 중 로그 출력 및 고정 보드 평가 콜백"""
     
-    def __init__(self, log_freq=1000, record_freq=1000, verbose=1):
+    def __init__(self, log_freq=10000, eval_freq=10000, board_dir="board_mat", verbose=1):
         super().__init__(verbose)
         self.log_freq = log_freq
-        self.record_freq = record_freq  # 그래프용 기록 주기
-        self.episode_rewards = []
+        self.eval_freq = eval_freq  # 고정 보드 평가 주기
+        self.board_dir = board_dir
         self.episode_scores = []
         
-        # 그래프용 데이터
+        # timestep 기준 카운터
+        self._next_log_timestep = log_freq
+        self._next_eval_timestep = eval_freq
+        
+        # 그래프용 데이터 (고정 보드 평가 결과)
         self.timesteps_history = []
-        self.avg_score_history = []
-        self.max_score_history = []
+        self.fixed_board_avg_history = []  # 고정 보드 평균 점수
+        
+        # 고정 보드 파일 로드
+        self.board_files = sorted([
+            os.path.join(board_dir, f) 
+            for f in os.listdir(board_dir) 
+            if f.endswith(".txt")
+        ])
+        print(f"📋 고정 평가용 보드: {len(self.board_files)}개")
         
     def _on_step(self) -> bool:
-        # 에피소드 종료 시 기록
+        # 에피소드 종료 시 기록 (로그용)
         if self.locals.get("dones") is not None:
             for i, done in enumerate(self.locals["dones"]):
                 if done:
@@ -74,54 +85,83 @@ class LoggingCallback(BaseCallback):
                     if "total_score" in info:
                         self.episode_scores.append(info["total_score"])
         
-        # 주기적으로 출력
-        if self.n_calls % self.log_freq == 0 and self.episode_scores:
+        # 주기적으로 로그 출력 (num_timesteps 기준)
+        if self.num_timesteps >= self._next_log_timestep and self.episode_scores:
             avg_score = np.mean(self.episode_scores[-100:])
-            max_score = np.max(self.episode_scores[-100:]) if self.episode_scores else 0
-            print(f"[Step {self.n_calls}] 최근 100 에피소드 - 평균: {avg_score:.1f}, 최고: {max_score}")
+            print(f"[Step {self.num_timesteps:,}] 최근 100 에피소드 평균: {avg_score:.1f}")
+            self._next_log_timestep += self.log_freq
         
-        # 그래프용 데이터 기록
-        if self.n_calls % self.record_freq == 0 and self.episode_scores:
-            avg_score = np.mean(self.episode_scores[-100:])
-            max_score = np.max(self.episode_scores[-100:])
-            self.timesteps_history.append(self.n_calls)
-            self.avg_score_history.append(avg_score)
-            self.max_score_history.append(max_score)
+        # 고정 보드 평가 (num_timesteps 기준)
+        if self.num_timesteps >= self._next_eval_timestep:
+            fixed_avg = self._evaluate_on_fixed_boards()
+            self.timesteps_history.append(self.num_timesteps)
+            self.fixed_board_avg_history.append(fixed_avg)
+            print(f"[Step {self.num_timesteps:,}] 🎯 고정 보드 평균: {fixed_avg:.1f}")
+            self._next_eval_timestep += self.eval_freq
         
         return True
     
+    def _evaluate_on_fixed_boards(self):
+        """고정 보드 전체에서 현재 모델 평가"""
+        scores = []
+        
+        for board_path in self.board_files:
+            mat = read_matrix(board_path)
+            
+            # 평가용 환경 생성 (seed=None으로 학습 RNG에 영향 없음)
+            env = make_env(use_mask=True)()
+            env.reset()  # Monitor가 step 허용하도록 reset 필요
+            
+            # 보드 교체 (reset 직후 덮어쓰기)
+            unwrapped = env.unwrapped
+            unwrapped.board = mat.copy().astype(np.int32)
+            unwrapped.candidates = list(find_candidates_fast(unwrapped.board))
+            unwrapped.total_score = 0
+            unwrapped.steps = 0
+            unwrapped._compute_next_candidates_cache()
+            obs = unwrapped._get_obs()
+            
+            # 플레이
+            while True:
+                action, _ = self.model.predict(obs, deterministic=True)
+                obs, reward, terminated, truncated, info = env.step(action)
+                if terminated or truncated:
+                    break
+            
+            scores.append(info["total_score"])
+        
+        return np.mean(scores)
+    
     def plot_learning_curve(self, save_path="learning_curve.png", show=True):
-        """학습 곡선 그래프 생성"""
+        """학습 곡선 그래프 생성 (고정 보드 평가 기준)"""
         import matplotlib as mpl
         import matplotlib.pyplot as plt
 
-        # ✅ 한글 폰트 설정 (Windows)
-        mpl.rcParams["font.family"] = "Malgun Gothic"   # 맑은 고딕
-        mpl.rcParams["axes.unicode_minus"] = False      # 마이너스(−) 깨짐 방지
+        # 한글 폰트 설정 (Windows)
+        mpl.rcParams["font.family"] = "Malgun Gothic"
+        mpl.rcParams["axes.unicode_minus"] = False
         
         if not self.timesteps_history:
             print("⚠️ 기록된 데이터가 없습니다.")
             return
         
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(10, 6))
         
-        # 평균 점수
-        plt.subplot(1, 2, 1)
-        plt.plot(self.timesteps_history, self.avg_score_history, 'b-', linewidth=2, label='평균 점수 (최근 100 에피소드)')
+        # 고정 보드 평균 점수
+        plt.plot(self.timesteps_history, self.fixed_board_avg_history, 
+                 'b-o', linewidth=2, markersize=4, label=f'고정 보드 평균 ({len(self.board_files)}개)')
+        
         plt.xlabel('Timesteps', fontsize=12)
         plt.ylabel('Average Score', fontsize=12)
-        plt.title('학습 중 평균 점수 변화', fontsize=14)
+        plt.title('학습 중 고정 보드 평균 점수 변화', fontsize=14)
         plt.grid(True, alpha=0.3)
         plt.legend()
         
-        # 최고 점수
-        plt.subplot(1, 2, 2)
-        plt.plot(self.timesteps_history, self.max_score_history, 'r-', linewidth=2, label='최고 점수 (최근 100 에피소드)')
-        plt.xlabel('Timesteps', fontsize=12)
-        plt.ylabel('Max Score', fontsize=12)
-        plt.title('학습 중 최고 점수 변화', fontsize=14)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
+        # Y축 범위 조정 (변화를 더 잘 보이게)
+        if self.fixed_board_avg_history:
+            y_min = min(self.fixed_board_avg_history) - 5
+            y_max = max(self.fixed_board_avg_history) + 5
+            plt.ylim(y_min, y_max)
         
         plt.tight_layout()
         
@@ -140,22 +180,29 @@ def mask_fn(env):
     return env.get_action_mask()
 
 
-def make_env(board_dir="board_mat", rank=0, use_mask=False):
-    """환경 생성 함수"""
+def make_env(board_dir="board_mat", rank=0, use_mask=False, seed=None):
+    """환경 생성 함수
+    
+    seed가 주어지면 base_seed로 설정되어
+    매 에피소드 reset마다 base_seed + episode_idx로 일관된 seed 사용
+    """
     def _init():
+        # base_seed 계산: seed가 있으면 seed + rank
+        base_seed = (seed + rank) if seed is not None else None
+        
         if use_mask:
-            env = AppleGameEnvWithMask(board_dir=board_dir)
+            env = AppleGameEnvWithMask(board_dir=board_dir, base_seed=base_seed)
             env = ActionMasker(env, mask_fn)
         else:
-            env = AppleGameEnv(board_dir=board_dir)
-        env = Monitor(env)
-        return env
+            env = AppleGameEnv(board_dir=board_dir, base_seed=base_seed)
+        
+        return Monitor(env)
     return _init
 
 
 def train_ppo(
     total_timesteps=100000,
-    learning_rate=0.0001,
+    learning_rate=5e-5,
     n_steps=2048,
     batch_size=128,
     n_epochs=10,
@@ -171,8 +218,8 @@ def train_ppo(
         print("❌ sb3-contrib가 필요합니다: pip install sb3-contrib")
         return None
     
-    # 병렬 환경 생성 (Mask 지원 환경)
-    env = DummyVecEnv([make_env(rank=i, use_mask=True) for i in range(n_envs)])
+    # 병렬 환경 생성 (Mask 지원 환경) - 각 환경에 rank별 시드 적용
+    env = DummyVecEnv([make_env(rank=i, use_mask=True, seed=42) for i in range(n_envs)])
     
     # GPU 사용 여부 확인
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -191,15 +238,17 @@ def train_ppo(
         gae_lambda=0.99,
         clip_range=0.2,
         verbose=1,
-        device=device
+        device=device,
+        seed=42  # 재현성을 위한 시드 고정
     )
     
-    # 콜백 설정 (기록 주기: total_timesteps / 100 또는 최소 1000)
-    record_freq = max(1000, total_timesteps // 100)
-    callback = LoggingCallback(log_freq=5000, record_freq=record_freq)
+    # 콜백 설정 (고정 보드 평가 주기: total_timesteps / 50 또는 최소 5000)
+    eval_freq = 5000
+    callback = LoggingCallback(log_freq=10000, eval_freq=eval_freq)
     
     # 학습
     print(f"총 {total_timesteps:,} 스텝 학습 예정 (환경 {n_envs}개 병렬)")
+    print(f"📊 고정 보드 평가 주기: {eval_freq:,} 스텝마다")
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback
