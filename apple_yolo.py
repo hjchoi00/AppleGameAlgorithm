@@ -217,7 +217,7 @@ def main():
     # 현재 스크립트 폴더 기준 경로 설정
     script_dir = Path(__file__).parent
     board_img_dir = script_dir / "board_img"
-    board_mat_dir = script_dir / "board_mat"
+    board_mat_dir = script_dir / "board_mat/train"
     
     # board_mat 폴더가 없으면 생성
     board_mat_dir.mkdir(exist_ok=True)
